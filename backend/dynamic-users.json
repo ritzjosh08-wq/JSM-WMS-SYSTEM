@@ -1,0 +1,18 @@
+[
+  {
+    "username": "salemmab",
+    "password": "salem123",
+    "name": "Salem Worker",
+    "role": "WORKER",
+    "location": "Salem MAB",
+    "dynamic": true
+  },
+  {
+    "username": "salemmabcust",
+    "password": "salem123",
+    "name": "Salem MAB",
+    "role": "CUSTOMER",
+    "location": "Salem MAB",
+    "dynamic": true
+  }
+]
