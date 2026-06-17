@@ -1,0 +1,314 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  name      String
+  role      String   @default("OPERATOR")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  auditLogs AuditLog[]
+}
+
+model Warehouse {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  name           String
+  storageType    String   
+  isActive       Boolean  @default(true)
+  totalCapacity  Float
+  usedCapacity   Float    @default(0)
+  
+  racks          Rack[]
+  floorLocations FloorLocation[]
+  inventory      InventoryBatch[]
+  inwardEntries  InwardLineItem[]
+  outwardEntries OutwardLineItem[]
+}
+
+model Rack {
+  id             String   @id @default(cuid())
+  warehouseId    String
+  code           String
+  isActive       Boolean  @default(true)
+  totalCapacity  Float
+  usedCapacity   Float    @default(0)
+  
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  rows           RackRow[]
+  bins           Bin[]
+  inventory      InventoryBatch[]
+}
+
+model RackRow {
+  id             String   @id @default(cuid())
+  rackId         String
+  code           String
+  
+  rack           Rack     @relation(fields: [rackId], references: [id])
+  levels         RackLevel[]
+}
+
+model RackLevel {
+  id             String   @id @default(cuid())
+  rowId          String
+  code           String
+  
+  row            RackRow  @relation(fields: [rowId], references: [id])
+  bins           Bin[]
+}
+
+model Bin {
+  id             String   @id @default(cuid())
+  levelId        String
+  rackId         String
+  code           String
+  capacity       Float
+  usedCapacity   Float    @default(0)
+  isActive       Boolean  @default(true)
+  
+  level          RackLevel @relation(fields: [levelId], references: [id])
+  rack           Rack      @relation(fields: [rackId], references: [id])
+  inventory      InventoryBatch[]
+}
+
+model FloorLocation {
+  id             String   @id @default(cuid())
+  warehouseId    String
+  zone           String
+  code           String
+  capacity       Float
+  usedCapacity   Float    @default(0)
+  isActive       Boolean  @default(true)
+  
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  inventory      InventoryBatch[]
+}
+
+model Material {
+  id                 String   @id @default(cuid())
+  code               String   @unique
+  description        String
+  materialType       String   
+  huUnit             String
+  category           String?
+  defaultStorageType String?
+  standardPackSize   Float?
+  minStockLevel      Float?
+  maxStockLevel      Float?
+  isActive           Boolean  @default(true)
+  
+  inventory          InventoryBatch[]
+}
+
+model InventoryBatch {
+  id              String   @id @default(cuid())
+  materialId      String
+  batchNumber     String
+  quantity        Float
+  warehouseId     String
+  rackId          String?
+  binId           String?
+  floorLocationId String?
+  receiptDate     DateTime
+  manufacturingDate DateTime?
+  stockStatus     String   
+  lastMovementDate DateTime @default(now())
+  customFields    String?  
+
+  
+  material        Material   @relation(fields: [materialId], references: [id])
+  warehouse       Warehouse  @relation(fields: [warehouseId], references: [id])
+  rack            Rack?      @relation(fields: [rackId], references: [id])
+  bin             Bin?       @relation(fields: [binId], references: [id])
+  floorLocation   FloorLocation? @relation(fields: [floorLocationId], references: [id])
+}
+
+model InwardEntry {
+  id               String   @id @default(cuid())
+  inwardNumber     String   @unique
+  truckNumber      String
+  transporter      String?
+  lrNumber         String?
+  sealNumber       String?
+  source           String?
+  sapDocumentNo    String?
+  gateEntryNo      String?
+  invoiceNumber    String?
+  gateSerialNo     String?
+  category         String?
+  inwardDate       DateTime?
+  truckInTime      DateTime?
+  unloadStartTime  DateTime?
+  unloadEndTime    DateTime?
+  truckOutTime     DateTime?
+  tat              Float?
+  tatStr           String?
+  status           String
+  createdAt        DateTime @default(now())
+  customFields     String?
+
+  lineItems        InwardLineItem[]
+}
+
+model InwardLineItem {
+  id              String   @id @default(cuid())
+  inwardEntryId   String
+  materialCode    String
+  quantity        Float
+  batchNumber     String
+  warehouseId     String
+  rackId          String?
+  binId           String?
+  floorLocationId String?
+  remarks         String?
+  lineItemStatus  String?  @default("PENDING")  
+  huUnit          String?
+  description     String?
+  binLocation     String?  
+  customFields    String?  
+  
+  inwardEntry     InwardEntry @relation(fields: [inwardEntryId], references: [id])
+  warehouse       Warehouse   @relation(fields: [warehouseId], references: [id])
+}
+
+model OutwardEntry {
+  id               String   @id @default(cuid())
+  outwardNumber    String   @unique
+  dispatchDate     DateTime
+  truckNumber      String
+  transporter      String?
+  destination      String?
+  sapDocumentNo    String?
+  lrNumber         String?
+  remarks          String?
+  status           String
+  createdAt        DateTime @default(now())
+
+  lineItems        OutwardLineItem[]
+}
+
+model OutwardLineItem {
+  id              String   @id @default(cuid())
+  outwardEntryId  String
+  materialCode    String
+  description     String?
+  batchNumber     String
+  requiredQty     Float
+  pickedQty       Float
+  warehouseId     String
+  rackId          String?
+  binId           String?
+  floorLocationId String?
+  customFields    String?
+
+  outwardEntry    OutwardEntry @relation(fields: [outwardEntryId], references: [id])
+  warehouse       Warehouse    @relation(fields: [warehouseId], references: [id])
+}
+
+model TruckMovement {
+  id               String   @id @default(cuid())
+  truckNumber      String
+  transporter      String?
+  movementType     String   
+  status           String   
+  source           String?
+  destination      String?
+  lrNumber         String?
+  sealNumber       String?
+  sapDocumentNo    String?
+  gateEntryNo      String?
+  truckInTime      DateTime?
+  actionStartTime  DateTime? 
+  actionEndTime    DateTime? 
+  truckOutTime     DateTime?
+  tat              Float?
+  remarks          String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model CycleCount {
+  id               String   @id @default(cuid())
+  countId          String   @unique
+  countDate        DateTime @default(now())
+  frequency        String   
+  materialCode     String
+  batchNumber      String
+  warehouseCode    String
+  locationCode     String   
+  systemQty        Float
+  physicalQty      Float?
+  varianceQty      Float?
+  status           String   
+  remarks          String?
+}
+
+model DamageRecord {
+  id               String   @id @default(cuid())
+  damageId         String   @unique
+  date             DateTime @default(now())
+  materialCode     String
+  batchNumber      String
+  warehouseCode    String
+  locationCode     String
+  totalQty         Float
+  damagedQty       Float
+  goodQty          Float
+  damageType       String
+  status           String   
+  remarks          String?
+}
+
+model StockMovement {
+  id               String   @id @default(cuid())
+  materialCode     String
+  batchNumber      String
+  fromLocation     String?
+  toLocation       String?
+  quantity         Float
+  movementType     String   
+  date             DateTime @default(now())
+  operator         String
+  remarks          String?
+}
+
+model UploadedDocument {
+  id               String   @id @default(cuid())
+  fileName         String
+  fileType         String
+  uploadDate       DateTime @default(now())
+  status           String   
+  extractedData    String   
+}
+
+model AuditLog {
+  id               String   @id @default(cuid())
+  actionType       String
+  module           String
+  referenceNumber  String?
+  oldValue         String?
+  newValue         String?
+  createdAt        DateTime @default(now())
+  userId           String
+  remarks          String?
+  
+  user             User     @relation(fields: [userId], references: [id])
+}
+
+model ReportExport {
+  id               String   @id @default(cuid())
+  reportName       String
+  exportFormat     String   
+  generatedAt      DateTime @default(now())
+  appliedFilters   String   
+  totalRecords     Int
+}

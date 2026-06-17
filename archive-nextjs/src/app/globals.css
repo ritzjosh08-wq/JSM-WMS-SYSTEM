@@ -1,0 +1,241 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@import "tailwindcss";
+
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-alpine.css";
+@import "ag-grid-community/styles/ag-theme-quartz.css";
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DARK ENTERPRISE THEME — JVS Logistics Control Tower
+   "Logistics Command Room · Industrial Operations Platform"
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Backgrounds */
+  --bg-canvas:          #080d1a;
+  --bg-body:            #0a0f1e;
+  --bg-sidebar:         #060c18;
+  --bg-card:            #111827;
+  --bg-elevated:        #1a2235;
+  --bg-input:           rgba(255,255,255,0.05);
+  --bg-surface:         #111827;
+  --bg-sidebar-hover:   rgba(255,255,255,0.06);
+  --bg-sidebar-active:  rgba(59,130,246,0.18);
+
+  /* ── Brand */
+  --brand-blue:       #3b82f6;
+  --brand-blue-dark:  #2563eb;
+  --brand-red:        #ef4444;
+
+  /* ── Text */
+  --text-primary:     #f1f5f9;
+  --text-secondary:   #94a3b8;
+  --text-muted-dark:  #64748b;
+  --text-on-dark:     #f8fafc;
+
+  /* ── Status */
+  --success:  #10b981;
+  --warning:  #f59e0b;
+  --danger:   #ef4444;
+  --info:     #3b82f6;
+
+  /* ── Borders */
+  --border:        rgba(148,163,184,0.10);
+  --border-strong: rgba(148,163,184,0.18);
+
+  /* ── Glow shadows */
+  --shadow-sm:        0 1px 4px rgba(0,0,0,0.5);
+  --shadow-md:        0 4px 16px rgba(0,0,0,0.6);
+  --shadow-lg:        0 8px 32px rgba(0,0,0,0.7);
+  --shadow-glow-blue: 0 0 20px rgba(59,130,246,0.20);
+  --shadow-card:      0 2px 8px rgba(0,0,0,0.5);
+
+  /* ── Typography */
+  --font-family: 'Inter', sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   BASE RESET
+   ───────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: var(--font-family);
+  background-color: var(--bg-body);
+  color: var(--text-primary);
+  line-height: 1.5;
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+ul, ol { list-style: none; }
+button { font-family: inherit; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   GLOBAL TAILWIND OVERRIDES — Dark Theme
+   These override Tailwind utility classes that assume a light theme.
+   ───────────────────────────────────────────────────────────────────── */
+
+/* Backgrounds */
+.bg-white        { background-color: var(--bg-card)    !important; }
+.bg-gray-50      { background-color: var(--bg-canvas)  !important; }
+.bg-gray-100     { background-color: rgba(255,255,255,0.05) !important; }
+.bg-gray-200     { background-color: rgba(255,255,255,0.08) !important; }
+.bg-surface-canvas { background-color: var(--bg-canvas) !important; }
+
+/* Status backgrounds — darkened for dark theme */
+.bg-green-50     { background-color: rgba(16,185,129,0.12)  !important; }
+.bg-green-100    { background-color: rgba(16,185,129,0.18)  !important; }
+.bg-green-200    { background-color: rgba(16,185,129,0.25)  !important; }
+.bg-blue-50      { background-color: rgba(59,130,246,0.12)  !important; }
+.bg-blue-100     { background-color: rgba(59,130,246,0.18)  !important; }
+.bg-amber-50     { background-color: rgba(245,158,11,0.12)  !important; }
+.bg-amber-100    { background-color: rgba(245,158,11,0.18)  !important; }
+.bg-red-50       { background-color: rgba(239,68,68,0.12)   !important; }
+.bg-red-100      { background-color: rgba(239,68,68,0.18)   !important; }
+.bg-orange-50    { background-color: rgba(249,115,22,0.12)  !important; }
+.bg-orange-100   { background-color: rgba(249,115,22,0.18)  !important; }
+.bg-purple-50    { background-color: rgba(168,85,247,0.12)  !important; }
+.bg-purple-100   { background-color: rgba(168,85,247,0.18)  !important; }
+.bg-indigo-50    { background-color: rgba(99,102,241,0.12)  !important; }
+.bg-indigo-100   { background-color: rgba(99,102,241,0.18)  !important; }
+
+/* Text */
+.text-gray-900   { color: #f1f5f9 !important; }
+.text-gray-800   { color: #e2e8f0 !important; }
+.text-gray-700   { color: #cbd5e1 !important; }
+.text-gray-600   { color: #94a3b8 !important; }
+.text-gray-500   { color: #64748b !important; }
+.text-gray-400   { color: #475569 !important; }
+
+/* Borders */
+.border-gray-100 { border-color: rgba(255,255,255,0.05) !important; }
+.border-gray-200 { border-color: var(--border) !important; }
+.border-gray-300 { border-color: var(--border-strong) !important; }
+.border-green-200  { border-color: rgba(16,185,129,0.30)  !important; }
+.border-green-300  { border-color: rgba(16,185,129,0.45)  !important; }
+.border-blue-200   { border-color: rgba(59,130,246,0.30)  !important; }
+.border-blue-300   { border-color: rgba(59,130,246,0.45)  !important; }
+.border-amber-200  { border-color: rgba(245,158,11,0.30)  !important; }
+.border-amber-300  { border-color: rgba(245,158,11,0.45)  !important; }
+.border-red-200    { border-color: rgba(239,68,68,0.30)   !important; }
+.border-red-300    { border-color: rgba(239,68,68,0.45)   !important; }
+.border-orange-200 { border-color: rgba(249,115,22,0.30)  !important; }
+.border-purple-200 { border-color: rgba(168,85,247,0.30)  !important; }
+.border-indigo-200 { border-color: rgba(99,102,241,0.30)  !important; }
+
+/* Dividers */
+.divide-gray-200 > * + * { border-color: var(--border) !important; }
+
+/* Hover states */
+.hover\:bg-gray-50:hover  { background-color: rgba(255,255,255,0.04) !important; }
+.hover\:bg-gray-100:hover { background-color: rgba(255,255,255,0.07) !important; }
+.hover\:bg-gray-200:hover { background-color: rgba(255,255,255,0.10) !important; }
+.hover\:bg-green-100:hover  { background-color: rgba(16,185,129,0.22) !important; }
+.hover\:bg-blue-100:hover   { background-color: rgba(59,130,246,0.22) !important; }
+.hover\:bg-amber-100:hover  { background-color: rgba(245,158,11,0.22) !important; }
+.hover\:bg-red-100:hover    { background-color: rgba(239,68,68,0.22)  !important; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   FORM ELEMENTS — Dark Inputs
+   ───────────────────────────────────────────────────────────────────── */
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  background-color: rgba(255,255,255,0.05) !important;
+  border-color: rgba(148,163,184,0.18)     !important;
+  color: var(--text-primary)               !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: rgba(59,130,246,0.5) !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important;
+  outline: none;
+}
+input::placeholder, textarea::placeholder { color: #475569 !important; }
+option { background-color: #1a2235 !important; color: #f1f5f9 !important; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   CARD / PANEL BASE
+   ───────────────────────────────────────────────────────────────────── */
+.shadow-sm { box-shadow: 0 1px 4px rgba(0,0,0,0.4) !important; }
+.shadow-md { box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important; }
+.shadow-lg { box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   AG GRID — Dark Enterprise Theme
+   ───────────────────────────────────────────────────────────────────── */
+.ag-theme-quartz,
+.ag-theme-alpine {
+  --ag-background-color:          #111827 !important;
+  --ag-foreground-color:          #f1f5f9 !important;
+  --ag-header-background-color:   #0d1421 !important;
+  --ag-header-foreground-color:   #94a3b8 !important;
+  --ag-odd-row-background-color:  rgba(255,255,255,0.02) !important;
+  --ag-row-hover-color:           rgba(59,130,246,0.08) !important;
+  --ag-selected-row-background-color: rgba(59,130,246,0.15) !important;
+  --ag-border-color:              rgba(148,163,184,0.10) !important;
+  --ag-secondary-border-color:    rgba(148,163,184,0.06) !important;
+  --ag-cell-horizontal-border:    none !important;
+  --ag-input-background-color:    rgba(255,255,255,0.06) !important;
+  --ag-input-border-color:        rgba(148,163,184,0.20) !important;
+  --ag-input-focus-border-color:  rgba(59,130,246,0.5) !important;
+  --ag-filter-tool-panel-top-border:  none;
+  --ag-pagination-background-color: #0d1421 !important;
+  --ag-panel-background-color:    #1a2235 !important;
+  --ag-card-shadow:               0 4px 16px rgba(0,0,0,0.5) !important;
+  --ag-font-family:               'Inter', sans-serif !important;
+  --ag-font-size:                 13px !important;
+}
+.ag-header-cell-label { color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; font-weight: 700; }
+.ag-row { border-bottom: 1px solid rgba(255,255,255,0.04) !important; }
+.ag-row:hover { background-color: rgba(59,130,246,0.07) !important; }
+.ag-paging-panel { background-color: #0d1421 !important; border-top: 1px solid rgba(255,255,255,0.06) !important; color: #94a3b8 !important; }
+.ag-paging-button { color: #94a3b8 !important; }
+.ag-paging-button:hover { color: #3b82f6 !important; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   SCROLLBARS — Dark Industrial
+   ───────────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar            { width: 6px; height: 6px; }
+::-webkit-scrollbar-track      { background: rgba(255,255,255,0.03); }
+::-webkit-scrollbar-thumb      { background: rgba(148,163,184,0.2); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.35); }
+
+/* ─────────────────────────────────────────────────────────────────────
+   PRINT STYLES — Cycle Count PDF
+   ───────────────────────────────────────────────────────────────────── */
+@media print {
+  body { background: white !important; color: black !important; }
+  .bg-white, .bg-gray-50 { background: white !important; }
+  * { color: black !important; border-color: #ccc !important; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   ENTERPRISE MICRO-ANIMATIONS
+   ───────────────────────────────────────────────────────────────────── */
+@keyframes pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(59,130,246,0); }
+}
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fadeSlideIn 0.2s ease-out both; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   MODAL DARK OVERRIDE
+   ───────────────────────────────────────────────────────────────────── */
+[role="dialog"],
+.modal-overlay > div,
+.fixed.inset-0 > div:last-child {
+  background-color: var(--bg-elevated) !important;
+  border: 1px solid var(--border-strong) !important;
+}
