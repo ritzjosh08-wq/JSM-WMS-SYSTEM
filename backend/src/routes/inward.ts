@@ -110,6 +110,7 @@ router.get('/', async (req, res) => {
 router.post('/commit', async (req, res) => {
   try {
     const entries = req.body.entries;
+    const createdBy: string = req.body.createdBy || '';
     if (!entries || !entries.length) return res.status(400).json({ error: "No entries provided" });
 
     // Group entries by invoiceNumber so they share one InwardEntry header
@@ -188,6 +189,7 @@ router.post('/commit', async (req, res) => {
             date: first.date,
             tatRemarks: first.tatRemarks,
             stockLocation: first.stockLocation,
+            createdBy,
           }),
           lineItems: {
             create: rows.map((row: any) => ({

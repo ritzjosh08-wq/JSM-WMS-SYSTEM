@@ -51,6 +51,7 @@ interface DispatchHeader {
   destination: string;
   sapDocumentNo: string;
   lrNumber: string;
+  createdBy: string;
 }
 
 interface RawBatch {
@@ -302,6 +303,7 @@ export default function OutwardClient() {
     destination: "",
     sapDocumentNo: "",
     lrNumber: "",
+    createdBy: "",
   });
   const [lines, setLines] = useState<OutwardLine[]>(draft?.lines ?? [emptyLine()]);
   const [inventoryMaterials, setInventoryMaterials] = useState<InventoryMaterial[]>([]);
@@ -557,7 +559,7 @@ export default function OutwardClient() {
     setMatchedBatches([]);
     setSelectedBatchIds(new Set());
     setHuSearched(false);
-    setHeader({ date: new Date().toISOString().split("T")[0], outboundInvoiceNo: "", truckNumber: "", transporter: "", source: "", destination: "", sapDocumentNo: "", lrNumber: "" });
+    setHeader({ date: new Date().toISOString().split("T")[0], outboundInvoiceNo: "", truckNumber: "", transporter: "", source: "", destination: "", sapDocumentNo: "", lrNumber: "", createdBy: "" });
   };
 
   // ── Render
@@ -634,6 +636,7 @@ export default function OutwardClient() {
             { label: "Destination",         field: "destination" as const,       placeholder: "Delivery location" },
             { label: "SAP Document No",     field: "sapDocumentNo" as const,     placeholder: "490XXXXX" },
             { label: "LR Number",           field: "lrNumber" as const,          placeholder: "LR No." },
+            { label: "Created By",          field: "createdBy" as const,         placeholder: "Your name" },
           ].map(({ label, field, type, placeholder }: any) => (
             <div key={field}>
               <label style={{ display: "block", fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "4px" }}>{label}</label>

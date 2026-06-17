@@ -20,11 +20,11 @@ export interface ManualEntryPayload {
   materialType: string;
 }
 
-async function commitInwardEntries(entries: ManualEntryPayload[]) {
+async function commitInwardEntries(entries: ManualEntryPayload[], createdBy: string) {
   const res = await fetch('http://localhost:5001/api/inward/commit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ entries })
+    body: JSON.stringify({ entries, createdBy })
   });
   if (!res.ok) {
     const error = await res.json();
@@ -961,6 +961,7 @@ export default function InwardClient() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
+  const [createdBy, setCreatedBy] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [smartUploading, setSmartUploading] = useState(false);
   const [smartError, setSmartError] = useState<string | null>(null);
@@ -1236,7 +1237,7 @@ export default function InwardClient() {
         discrepancyRemarks: e.discrepancyRemarks,
         status: e.entryStatus === "DISCREPANCY" ? "DISCREPANCY" : "APPROVED",
       }));
-      await commitInwardEntries(payload);
+      await commitInwardEntries(payload, createdBy);
       setSavedOk(true);
       setEntries([]);
       setSmartError(null);
@@ -1368,6 +1369,15 @@ export default function InwardClient() {
               className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 rounded-lg transition">
               <CheckSquare size={14} /> Approve All
             </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <label style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>Created By</label>
+              <input
+                value={createdBy}
+                onChange={e => setCreatedBy(e.target.value)}
+                placeholder="Your name"
+                style={{ border: "1.5px solid #e2e8f0", borderRadius: "8px", padding: "7px 10px", fontSize: "12px", color: "#0f172a", outline: "none", width: "150px", background: "#fff" }}
+              />
+            </div>
             <button onClick={handleCommit} disabled={isSaving || (approved + discrepancy === 0)}
               className={`flex items-center gap-2 px-5 py-2 text-sm font-bold text-white rounded-lg shadow-md transition ${
                 approved + discrepancy > 0

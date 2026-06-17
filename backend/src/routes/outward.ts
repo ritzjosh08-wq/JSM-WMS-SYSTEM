@@ -113,10 +113,11 @@ router.post('/dispatch', async (req, res) => {
       }))
     );
 
-    // pack lrNumber into remarks alongside source — no schema change needed
+    // pack lrNumber + createdBy into remarks alongside source — no schema change needed
     const remarksParts: string[] = [];
-    if (data.source)   remarksParts.push(`Source: ${data.source}`);
-    if (data.lrNumber) remarksParts.push(`LR: ${data.lrNumber}`);
+    if (data.source)     remarksParts.push(`Source: ${data.source}`);
+    if (data.lrNumber)   remarksParts.push(`LR: ${data.lrNumber}`);
+    if (data.createdBy)  remarksParts.push(`Created By: ${data.createdBy}`);
 
     const outward = await prisma.outwardEntry.create({
       data: {
