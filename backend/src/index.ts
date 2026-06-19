@@ -31,6 +31,7 @@ import cycleCountRouter from './routes/cycle-count';
 import outwardRouter from './routes/outward';
 import materialsRouter from './routes/materials';
 import authRouter from './routes/auth';
+import warehouseRouter from './routes/warehouse';
 
 app.use('/api/inward', inwardRouter);
 app.use('/api/dashboard', dashboardRouter);
@@ -39,6 +40,7 @@ app.use('/api/cycle-count', cycleCountRouter);
 app.use('/api/outward', outwardRouter);
 app.use('/api/materials', materialsRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/warehouse', warehouseRouter);
 
 // Basic health check
 app.get('/api/health', (req, res) => {

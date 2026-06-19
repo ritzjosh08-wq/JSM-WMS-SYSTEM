@@ -59,6 +59,7 @@ interface RawBatch {
   batchNumber: string;
   quantity: number;
   warehouseId: string;
+  stockStatus?: string;
   customFields: string | null;
   material: { code: string; description: string; materialType?: string; category?: string; huUnit?: string } | null;
 }
@@ -319,6 +320,8 @@ export default function OutwardClient() {
   const [matchedBatches, setMatchedBatches] = useState<RawBatch[]>([]);
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(new Set());
   const [huSearched, setHuSearched] = useState(false);
+  // Per-batch dispatch qty (partial dispatch — defaults to full batch quantity)
+  const [huBatchQtys, setHuBatchQtys] = useState<Map<string, number>>(new Map());
 
   // ── Persist draft to localStorage whenever header/lines change
   useEffect(() => { saveDraft(header, lines); }, [header, lines]);
@@ -330,8 +333,8 @@ export default function OutwardClient() {
       .then(r => r.json())
       .then(data => {
         const inv: any[] = Array.isArray(data.inventory) ? data.inventory : [];
-        // Store raw batches (for HU unit lookup)
-        setAllBatches(inv.filter(i => i.quantity > 0 && i.material?.code));
+        // Store raw batches (for HU unit lookup — include discrepancy items too)
+        setAllBatches(inv.filter(i => i.quantity > 0 && i.material?.code).map(i => ({ ...i, stockStatus: i.stockStatus })));
         // Aggregate by material code for the autocomplete
         const map = new Map<string, InventoryMaterial>();
         inv.forEach(item => {
@@ -491,6 +494,10 @@ export default function OutwardClient() {
     });
     setMatchedBatches(matched);
     setSelectedBatchIds(new Set(matched.map(b => b.id)));
+    // Initialise dispatch qty = full quantity for each batch (user can reduce)
+    const initQtys = new Map<string, number>();
+    matched.forEach(b => initQtys.set(b.id, b.quantity));
+    setHuBatchQtys(initQtys);
     setHuSearched(true);
   };
 
@@ -521,8 +528,10 @@ export default function OutwardClient() {
         });
       }
       const ln = lineMap.get(code)!;
-      ln.requiredQty += b.quantity;
-      ln.picks.push({ batchId: b.id, batchNumber: b.batchNumber, pickQty: b.quantity, stockLocation: cf.stockLocation || "", warehouseId: b.warehouseId });
+      // Use user-specified partial dispatch qty, clamped to available stock
+      const dispQty = Math.min(Math.max(0, huBatchQtys.get(b.id) ?? b.quantity), b.quantity);
+      ln.requiredQty += dispQty;
+      ln.picks.push({ batchId: b.id, batchNumber: b.batchNumber, pickQty: dispQty, stockLocation: cf.stockLocation || "", warehouseId: b.warehouseId });
     });
     const dispatchLines = Array.from(lineMap.values());
 
@@ -555,6 +564,7 @@ export default function OutwardClient() {
     setDispatchResult(null);
     setDispatchError(null);
     setHuBulkText("");
+    setHuBatchQtys(new Map());
     setHuEntries([""]);
     setMatchedBatches([]);
     setSelectedBatchIds(new Set());
@@ -739,8 +749,8 @@ export default function OutwardClient() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                   <thead>
                     <tr>
-                      {["✓", "HU Unit", "Material Code", "Description", "Type", "Category", "Batch No", "Invoice No", "BIN", "Stock Location", "Qty"].map(h => (
-                        <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontSize: "10px", fontWeight: 700, color: "#64748b", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
+                      {["✓", "HU Unit", "Material Code", "Description", "Type", "Category", "Batch No", "Invoice No", "BIN", "Stock Location", "In Stock", "Dispatch Qty", "Remaining"].map(h => (
+                        <th key={h} style={{ padding: "7px 10px", textAlign: h === "In Stock" || h === "Dispatch Qty" || h === "Remaining" ? "right" : "left", fontSize: "10px", fontWeight: 700, color: h === "Dispatch Qty" ? "#2563eb" : "#64748b", borderBottom: "1.5px solid #e2e8f0", background: h === "Dispatch Qty" ? "#eff6ff" : "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -748,6 +758,15 @@ export default function OutwardClient() {
                     {matchedBatches.map((batch, ri) => {
                       const cf = parseCF(batch.customFields);
                       const sel = selectedBatchIds.has(batch.id);
+                      const isDisc = batch.stockStatus === "DISCREPANCY" ||
+                        Number(cf.shortInPallet || 0) !== 0 ||
+                        Number(cf.shortExcessInKg || 0) !== 0 ||
+                        Number(cf.shortExcessInQty || 0) !== 0 ||
+                        !!cf.discrepancyRemarks || !!cf.discrepancy;
+                      const dispQty = huBatchQtys.get(batch.id) ?? batch.quantity;
+                      const remaining = batch.quantity - dispQty;
+                      const invoiceQty = Number(cf.invoiceQtyInNos || 0);
+                      const willAutoRectify = isDisc && invoiceQty > 0 && remaining === invoiceQty;
                       return (
                         <tr key={batch.id} onClick={() => {
                           setSelectedBatchIds(prev => {
@@ -755,13 +774,20 @@ export default function OutwardClient() {
                             if (next.has(batch.id)) next.delete(batch.id); else next.add(batch.id);
                             return next;
                           });
-                        }} style={{ background: sel ? "#ecfdf5" : ri % 2 === 0 ? "#fff" : "#f8fafc", cursor: "pointer", borderLeft: sel ? "3px solid #059669" : "3px solid transparent" }}>
+                        }} style={{ background: isDisc && sel ? "#fff7ed" : sel ? "#ecfdf5" : ri % 2 === 0 ? "#fff" : "#f8fafc", cursor: "pointer", borderLeft: sel ? (isDisc ? "3px solid #f97316" : "3px solid #059669") : "3px solid transparent" }}>
                           <td style={{ padding: "7px 10px" }}>
                             <input type="checkbox" checked={sel} onChange={() => {}} style={{ cursor: "pointer" }} />
                           </td>
                           <td style={{ padding: "7px 10px", fontFamily: "monospace", fontWeight: 800, color: "#1e40af" }}>{cf.huUnit || "—"}</td>
-                          <td style={{ padding: "7px 10px", fontFamily: "monospace", fontWeight: 700, color: "#0f172a" }}>{batch.material?.code || "—"}</td>
-                          <td style={{ padding: "7px 10px", color: "#374151", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{batch.material?.description || "—"}</td>
+                          <td style={{ padding: "7px 10px", fontFamily: "monospace", fontWeight: 700, color: "#0f172a" }}>
+                            {batch.material?.code || "—"}
+                            {isDisc && (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: "2px", fontSize: "9px", fontWeight: 800, color: "#b91c1c", background: "#fef2f2", border: "1px solid #fca5a5", padding: "1px 5px", borderRadius: "4px", marginLeft: "4px" }}>
+                                ⚠ DISC
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: "7px 10px", color: "#374151", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{batch.material?.description || "—"}</td>
                           <td style={{ padding: "7px 10px", color: "#0891b2", fontWeight: 600 }}>{cf.materialType || "—"}</td>
                           <td style={{ padding: "7px 10px" }}>
                             <span style={{ background: (cf.category || "RM").toUpperCase().includes("FG") ? "#f5f3ff" : "#ecfdf5", color: (cf.category || "RM").toUpperCase().includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${(cf.category || "RM").toUpperCase().includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 7px", borderRadius: "12px", fontSize: "10px", fontWeight: 700 }}>
@@ -772,7 +798,31 @@ export default function OutwardClient() {
                           <td style={{ padding: "7px 10px", fontFamily: "monospace", fontSize: "11px", color: "#2563eb", fontWeight: 700 }}>{cf.invoiceNo || "—"}</td>
                           <td style={{ padding: "7px 10px", fontWeight: 700, color: "#7c3aed" }}>{cf.binLocation || "—"}</td>
                           <td style={{ padding: "7px 10px", color: "#374151" }}>{cf.stockLocation || "—"}</td>
-                          <td style={{ padding: "7px 10px", fontWeight: 800, color: "#0f172a", textAlign: "right" }}>{batch.quantity.toFixed(0)}</td>
+                          <td style={{ padding: "7px 10px", fontWeight: 700, color: "#475569", textAlign: "right" }}>{batch.quantity.toFixed(0)}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", background: sel ? "#eff6ff" : "transparent" }} onClick={e => e.stopPropagation()}>
+                            <input
+                              type="number"
+                              min={0}
+                              max={batch.quantity}
+                              value={sel ? dispQty : batch.quantity}
+                              disabled={!sel}
+                              onChange={e => {
+                                const v = Math.min(Math.max(0, Number(e.target.value)), batch.quantity);
+                                setHuBatchQtys(prev => { const m = new Map(prev); m.set(batch.id, v); return m; });
+                              }}
+                              style={{ width: "72px", border: sel ? "1.5px solid #93c5fd" : "1.5px solid #e2e8f0", borderRadius: "6px", padding: "4px 6px", fontSize: "12px", fontWeight: 800, color: sel ? "#1e40af" : "#94a3b8", textAlign: "right", background: sel ? "#fff" : "#f8fafc", outline: "none" }}
+                            />
+                          </td>
+                          <td style={{ padding: "7px 10px", fontWeight: 700, textAlign: "right", color: remaining === 0 ? "#64748b" : remaining > 0 ? "#059669" : "#dc2626" }}>
+                            {sel ? (
+                              <span>
+                                {remaining.toFixed(0)}
+                                {willAutoRectify && (
+                                  <span style={{ display: "block", fontSize: "9px", fontWeight: 800, color: "#059669", marginTop: "1px" }}>✓ Auto-rectify</span>
+                                )}
+                              </span>
+                            ) : "—"}
+                          </td>
                         </tr>
                       );
                     })}
@@ -780,7 +830,17 @@ export default function OutwardClient() {
                 </table>
 
                 {/* Dispatch bar */}
-                {!isViewer && selectedBatchIds.size > 0 && (
+                {!isViewer && selectedBatchIds.size > 0 && (() => {
+                  const selBatches = matchedBatches.filter(b => selectedBatchIds.has(b.id));
+                  const totalDispatch = selBatches.reduce((s, b) => s + Math.min(huBatchQtys.get(b.id) ?? b.quantity, b.quantity), 0);
+                  const totalRemaining = selBatches.reduce((s, b) => s + (b.quantity - Math.min(huBatchQtys.get(b.id) ?? b.quantity, b.quantity)), 0);
+                  const autoRectifyCount = selBatches.filter(b => {
+                    const cf = parseCF(b.customFields);
+                    const isDisc = b.stockStatus === "DISCREPANCY" || Number(cf.shortInPallet||0) !== 0 || Number(cf.shortExcessInKg||0) !== 0 || Number(cf.shortExcessInQty||0) !== 0 || !!cf.discrepancyRemarks || !!cf.discrepancy;
+                    const remaining = b.quantity - Math.min(huBatchQtys.get(b.id) ?? b.quantity, b.quantity);
+                    return isDisc && Number(cf.invoiceQtyInNos||0) > 0 && remaining === Number(cf.invoiceQtyInNos||0);
+                  }).length;
+                  return (
                   <div style={{ marginTop: "14px", background: "#ecfdf5", border: "1.5px solid #a7f3d0", borderRadius: "10px", padding: "14px 18px", display: "flex", alignItems: "center", gap: "16px" }}>
                     <CheckCircle2 size={18} style={{ color: "#059669", flexShrink: 0 }} />
                     <div>
@@ -788,7 +848,9 @@ export default function OutwardClient() {
                         {selectedBatchIds.size} batch{selectedBatchIds.size !== 1 ? "es" : ""} selected for dispatch
                       </div>
                       <div style={{ fontSize: "11px", color: "#059669", marginTop: "2px" }}>
-                        Total qty: {matchedBatches.filter(b => selectedBatchIds.has(b.id)).reduce((s, b) => s + b.quantity, 0).toFixed(0)} units
+                        Dispatch: <strong>{totalDispatch.toFixed(0)}</strong> units
+                        {totalRemaining > 0 && <> · Remaining in inventory: <strong>{totalRemaining.toFixed(0)}</strong></>}
+                        {autoRectifyCount > 0 && <span style={{ marginLeft: "8px", color: "#b45309", fontWeight: 700 }}>⚡ {autoRectifyCount} discrepancy batch{autoRectifyCount !== 1 ? "es" : ""} will auto-rectify</span>}
                       </div>
                     </div>
                     <button onClick={handleHUDispatch} disabled={dispatching}
@@ -798,7 +860,8 @@ export default function OutwardClient() {
                         : <><Truck size={14} /> Confirm Dispatch</>}
                     </button>
                   </div>
-                )}
+                  );
+                })()}
               </>
             )}
           </div>

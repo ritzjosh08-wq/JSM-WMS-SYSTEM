@@ -1,5 +1,18 @@
 node_modules
-# Keep environment variables out of version control
+dist
+
+# Environment variables
 .env
 
+# Prisma generated client
 /generated/prisma
+
+# SQLite database — each developer has their own local DB
+prisma/dev.db
+prisma/dev.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# Runtime data files — created automatically on first run, contain passwords
+dynamic-users.json
+customer-permissions.json

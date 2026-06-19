@@ -219,6 +219,7 @@ router.post('/commit', async (req, res) => {
                 boxPerKg: row.boxPerKg,
                 shortInPallet: row.shortInPallet,
                 shortExcessInKg: row.shortExcessInKg,
+                shortExcessInQty: row.shortExcessInQty,
                 discrepancyRemarks: row.discrepancyRemarks,
                 tatRemarks: row.tatRemarks,
                 stockLocation: row.stockLocation,
@@ -246,31 +247,58 @@ router.post('/commit', async (req, res) => {
           });
         }
 
+        const batchKey = row.invoiceNumber || row.sapDocumentNumber || "MANUAL";
+
+        // Detect discrepancy first so we can decide whether to skip zero-qty rows
+        const hasDiscrepancy = !!(
+          row.status === "DISCREPANCY" ||
+          row.entryStatus === "DISCREPANCY" ||
+          row.discrepancyRemarks ||
+          Number(row.shortInPallet    || 0) !== 0 ||
+          Number(row.shortExcessInKg  || 0) !== 0 ||
+          Number(row.shortExcessInQty || 0) !== 0
+        );
+
         // Use the best available quantity — Nos first, then Pallets, then Net Weight
         const receivedQty =
           row.receivedQtyInNos   || row.invoiceQtyInNos    ||
           row.receivedQtyInPallets || row.invoiceQtyInPallet ||
           row.receivedNetWeight  || row.invoiceNetWeight   || 0;
-        if (receivedQty <= 0) continue;
-
-        const batchKey = row.invoiceNumber || row.sapDocumentNumber || "MANUAL";
-
-        // Store all relevant quantities + inward date in customFields for the Inventory page
+        // Skip only non-discrepancy items with no quantity; discrepancy items always commit
+        if (receivedQty <= 0 && !hasDiscrepancy) continue;
         const invCustomFields = JSON.stringify({
-          netWeight:      row.receivedNetWeight    || row.invoiceNetWeight    || 0,
-          pallets:        row.receivedQtyInPallets || row.invoiceQtyInPallet  || 0,
-          nos:            row.receivedQtyInNos     || row.invoiceQtyInNos     || 0,
-          numberOfBoxes:  row.numberOfBoxes        || 0,
+          netWeight:           row.receivedNetWeight    || row.invoiceNetWeight    || 0,
+          invoiceNetWeight:    row.invoiceNetWeight     || 0,
+          receivedNetWeight:   row.receivedNetWeight    || 0,
+          pallets:             row.receivedQtyInPallets || row.invoiceQtyInPallet  || 0,
+          invoiceQtyInPallet:  row.invoiceQtyInPallet   || 0,
+          receivedQtyInPallets:row.receivedQtyInPallets || 0,
+          nos:                 row.receivedQtyInNos     || row.invoiceQtyInNos     || 0,
+          invoiceQtyInNos:     row.invoiceQtyInNos      || 0,
+          receivedQtyInNos:    row.receivedQtyInNos     || 0,
+          numberOfBoxes:       row.numberOfBoxes        || 0,
+          shortInPallet:       row.shortInPallet        || 0,
+          shortExcessInKg:     row.shortExcessInKg      || 0,
+          shortExcessInQty:    row.shortExcessInQty     || 0,
+          discrepancyRemarks:  row.discrepancyRemarks   || "",
           category:       row.category,
           binLocation:    row.binLocation,
-          stockLocation:  row.stockLocation,
+          stockLocation:  row.stockLocation || first.stockLocation || "",
           huUnit:         row.huUnit,
-          invoiceNo:      row.invoiceNumber,
-          sapDocNo:       row.sapDocumentNumber,
-          source:         row.source,
+          invoiceNo:      row.invoiceNumber || first.invoiceNumber || "",
+          sapDocNo:       row.sapDocumentNumber || first.sapDocumentNumber || "",
+          gateSerialNo:   row.gateSerialNo  || first.gateSerialNo  || "",
+          source:         row.source        || first.source        || "",
+          truckNumber:    row.truckNumber   || first.truckNumber   || "",
+          lrNumber:       row.lrNumber      || first.lrNumber      || "",
+          transporter:    row.transporter   || first.transporter   || "",
+          sealNumber:     row.sealNumber    || first.sealNumber    || "",
           status:         row.status,
           materialType:   row.materialType || "",
-          inwardDate:     row.date || "",
+          inwardDate:     row.date || first.date || "",
+          tatRemarks:     row.tatRemarks   || first.tatRemarks || "",
+          createdBy:      createdBy        || "",
+          discrepancy:    hasDiscrepancy,
         });
 
         // Create new inventory batch (no merging — same material+HU unit is an error above)
@@ -278,10 +306,46 @@ router.post('/commit', async (req, res) => {
           where: { materialId: material.id, batchNumber: batchKey, warehouseId: defaultWarehouse.id },
         });
 
+        // Resolve binLocation code → FloorLocation id, scoped to the correct warehouse.
+        // stockLocation on the row (e.g. "CM35" or "FG05") tells us which warehouse to
+        // look in so that identical bin codes in different warehouses never collide.
+        let resolvedFloorLocationId: string | null = null;
+        let resolvedWarehouseId: string = defaultWarehouse.id;
+        if (row.binLocation && row.binLocation.trim()) {
+          const binCode = row.binLocation.trim();
+
+          // Determine target warehouse from the row's stockLocation field
+          const stockLocCode = (row.stockLocation || first.stockLocation || '').trim().toUpperCase();
+
+          // Build the where clause — prefer warehouse-scoped lookup
+          let targetWarehouseId: string | undefined;
+          if (stockLocCode) {
+            const targetWh = await prisma.warehouse.findFirst({ where: { code: stockLocCode } });
+            if (targetWh) targetWarehouseId = targetWh.id;
+          }
+
+          const floorLoc = await prisma.floorLocation.findFirst({
+            where: {
+              code: binCode,
+              isActive: true,
+              ...(targetWarehouseId ? { warehouseId: targetWarehouseId } : {}),
+            },
+          });
+          if (floorLoc) {
+            resolvedFloorLocationId = floorLoc.id;
+            resolvedWarehouseId = floorLoc.warehouseId;
+          }
+        }
+
         if (existing) {
           await prisma.inventoryBatch.update({
             where: { id: existing.id },
-            data: { quantity: existing.quantity + receivedQty, lastMovementDate: new Date(), customFields: invCustomFields },
+            data: {
+              quantity: existing.quantity + receivedQty,
+              lastMovementDate: new Date(),
+              customFields: invCustomFields,
+              ...(resolvedFloorLocationId ? { floorLocationId: resolvedFloorLocationId, warehouseId: resolvedWarehouseId } : {}),
+            },
           });
         } else {
           await prisma.inventoryBatch.create({
@@ -289,9 +353,10 @@ router.post('/commit', async (req, res) => {
               materialId: material.id,
               batchNumber: batchKey,
               quantity: receivedQty,
-              warehouseId: defaultWarehouse.id,
+              warehouseId: resolvedWarehouseId,
+              floorLocationId: resolvedFloorLocationId,
               receiptDate: parseInwardDate(row.date),
-              stockStatus: "GOOD",
+              stockStatus: hasDiscrepancy ? "DISCREPANCY" : "GOOD",
               customFields: invCustomFields,
             },
           });
@@ -344,10 +409,11 @@ router.get('/discrepancies', async (req, res) => {
       for (const item of entry.lineItems) {
         let cf: any = {};
         try { cf = JSON.parse(item.customFields || '{}'); } catch {}
-        const shortPallet = Number(cf.shortInPallet || 0);
-        const shortExcess = Number(cf.shortExcessInKg || 0);
+        const shortPallet   = Number(cf.shortInPallet    || 0);
+        const shortExcess   = Number(cf.shortExcessInKg  || 0);
+        const shortQty      = Number(cf.shortExcessInQty || 0);
         const isDiscrepancyStatus = item.lineItemStatus === 'DISCREPANCY';
-        if (shortPallet === 0 && shortExcess === 0 && !cf.discrepancyRemarks && !isDiscrepancyStatus) continue;
+        if (shortPallet === 0 && shortExcess === 0 && shortQty === 0 && !cf.discrepancyRemarks && !isDiscrepancyStatus) continue;
         rows.push({
           id: item.id,
           entryId: entry.id,
@@ -369,6 +435,7 @@ router.get('/discrepancies', async (req, res) => {
           receivedNetWeight: cf.receivedNetWeight,
           shortInPallet: shortPallet,
           shortExcessInKg: shortExcess,
+          shortExcessInQty: shortQty,
           discrepancyRemarks: cf.discrepancyRemarks || '',
         });
       }
@@ -392,7 +459,8 @@ router.delete('/line-item/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id;
+    // Delete children first (no cascade on schema)
     await prisma.inwardLineItem.deleteMany({ where: { inwardEntryId: id } });
     await prisma.inwardEntry.delete({ where: { id } });
     res.json({ success: true });

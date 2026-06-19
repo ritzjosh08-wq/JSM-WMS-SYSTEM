@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rmOpen, setRmOpen] = useState(false);
+  const [discOpen, setDiscOpen] = useState(false);
 
   useEffect(() => {
     fetch('http://localhost:5001/api/dashboard')
@@ -40,10 +41,11 @@ export default function Dashboard() {
     { label: "RM Inventory",     value: data.inventoryRMPallets ?? data.inventoryRM, icon: Package, color: "#7c3aed", bg: "#f5f3ff", border: "#ddd6fe", sub: "pallets", isRM: true },
     { label: "FG Inventory",     value: data.inventoryFGPallets ?? data.inventoryFG, icon: Layers,  color: "#0891b2", bg: "#ecfeff", border: "#a5f3fc", sub: "pallets" },
     { label: "Pending Counts",   value: data.pendingCycleCounts, icon: ClipboardList,  color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
-    { label: "Discrepancies",    value: data.discrepancyCount,  icon: AlertTriangle,   color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
+    { label: "Discrepancies",    value: data.discrepancyCount,  icon: AlertTriangle,   color: "#dc2626", bg: "#fef2f2", border: "#fecaca", isDisc: true },
   ];
 
   const rmByType: { type: string; pallets: number }[] = data.rmByType || [];
+  const discByCategory: { category: string; count: number }[] = data.discrepancyByCategory || [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -67,11 +69,15 @@ export default function Dashboard() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
         {kpiCards.map((card) => {
           const Icon = card.icon;
-          const isRm = (card as any).isRM;
+          const isRm   = (card as any).isRM;
+          const isDisc = (card as any).isDisc;
+          const hasBreakdown = (isRm && rmByType.length > 0) || (isDisc && discByCategory.length > 0);
+          const isOpen = isRm ? rmOpen : isDisc ? discOpen : false;
+          const toggleOpen = isRm ? () => setRmOpen(o => !o) : isDisc ? () => setDiscOpen(o => !o) : undefined;
           return (
             <div
               key={card.label}
-              onClick={isRm ? () => setRmOpen(o => !o) : undefined}
+              onClick={hasBreakdown ? toggleOpen : undefined}
               style={{
                 background: "#ffffff",
                 border: `1px solid ${card.border}`,
@@ -83,8 +89,8 @@ export default function Dashboard() {
                 boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
                 transition: "transform 0.15s, box-shadow 0.15s",
                 position: "relative",
-                cursor: isRm ? "pointer" : "default",
-                zIndex: isRm && rmOpen ? 100 : "auto",
+                cursor: hasBreakdown ? "pointer" : "default",
+                zIndex: isOpen ? 100 : "auto",
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(0,0,0,0.08)";
@@ -120,12 +126,14 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* RM click-to-expand: material-type breakdown */}
-              {isRm && rmByType.length > 0 && (
-                <div style={{ fontSize: "10px", color: "#a78bfa", fontWeight: 600, marginTop: "-4px" }}>
-                  {rmOpen ? "▲ Hide breakdown" : "▼ View breakdown"}
+              {/* Click-to-expand hint */}
+              {hasBreakdown && (
+                <div style={{ fontSize: "10px", color: isDisc ? "#f87171" : "#a78bfa", fontWeight: 600, marginTop: "-4px" }}>
+                  {isOpen ? "▲ Hide breakdown" : "▼ View breakdown"}
                 </div>
               )}
+
+              {/* RM breakdown */}
               {isRm && rmOpen && rmByType.length > 0 && (
                 <div
                   onClick={e => e.stopPropagation()}
@@ -157,6 +165,62 @@ export default function Dashboard() {
                       <span style={{ fontSize: "12px", fontWeight: 800, color: "#7c3aed" }}>{pallets} pallets</span>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Discrepancy by category breakdown */}
+              {isDisc && discOpen && discByCategory.length > 0 && (
+                <div
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    left: 0,
+                    right: 0,
+                    zIndex: 50,
+                    background: "#fff",
+                    border: "1.5px solid #fecaca",
+                    borderRadius: "10px",
+                    padding: "12px 14px",
+                    boxShadow: "0 8px 24px rgba(220,38,38,0.10)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                    <div style={{ fontSize: "9px", fontWeight: 800, color: "#dc2626", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                      Discrepancies by Category
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); setDiscOpen(false); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: "14px", lineHeight: 1, padding: "0 2px" }}
+                    >×</button>
+                  </div>
+                  {discByCategory.map(({ category, count }) => {
+                    const isRM = category === "RM";
+                    return (
+                      <div key={category} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #fef2f2" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                          <span style={{
+                            fontSize: "9px", fontWeight: 800, padding: "2px 7px", borderRadius: "10px",
+                            background: isRM ? "#ecfdf5" : "#f5f3ff",
+                            color: isRM ? "#059669" : "#7c3aed",
+                            border: `1px solid ${isRM ? "#a7f3d0" : "#ddd6fe"}`,
+                          }}>
+                            {category}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          <span style={{ fontSize: "14px", fontWeight: 900, color: "#dc2626" }}>{count}</span>
+                          <span style={{ fontSize: "9px", color: "#f87171", fontWeight: 600 }}>batches</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "#374151" }}>Total</span>
+                    <span style={{ fontSize: "13px", fontWeight: 900, color: "#dc2626" }}>
+                      {discByCategory.reduce((s, d) => s + d.count, 0)}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

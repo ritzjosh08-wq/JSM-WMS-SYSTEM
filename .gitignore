@@ -1,0 +1,47 @@
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+dist/
+dist-ssr/
+build/
+backend/dist/
+
+# ── Database (each developer uses their own local SQLite) ─────────────────────
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# ── Runtime data (auto-created on first run, contain passwords) ───────────────
+backend/dynamic-users.json
+backend/customer-permissions.json
+
+# ── Environment variables ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# ── OS / Editor artifacts ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.suo
+*.njsproj
+*.sln
+*.sw?
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# ── Stray compiled files ──────────────────────────────────────────────────────
+*.js.map
+OneDrive_*.js

@@ -12,9 +12,28 @@ const API = 'http://localhost:5001/api';
 type ReportType = 'inward' | 'outward' | 'inventory' | 'cycle-count' | 'discrepancy';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// Parse dates stored in both ISO (YYYY-MM-DD / DateTime) and DD-MM-YYYY / DD/MM/YYYY formats
+function parseAnyDate(d: string | null | undefined): Date | null {
+  if (!d) return null;
+  // Try DD-MM-YYYY or DD/MM/YYYY
+  const ddmm = /^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/.exec(d.trim());
+  if (ddmm) return new Date(Number(ddmm[3]), Number(ddmm[2]) - 1, Number(ddmm[1]));
+  // Try ISO / standard
+  const dt = new Date(d);
+  return isNaN(dt.getTime()) ? null : dt;
+}
 function fmtDate(d: string | null | undefined) {
   if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const dt = parseAnyDate(d);
+  if (!dt) return '—';
+  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+// For Excel export — returns formatted date string ('' for empty/invalid so cells stay blank)
+function fmtDateExport(d: string | null | undefined) {
+  if (!d) return '';
+  const dt = parseAnyDate(d);
+  if (!dt) return typeof d === 'string' ? d : '';
+  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 function parseCF(s: string | null | undefined): any {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
@@ -42,7 +61,7 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
       return lineItems.map((item: any) => {
         const cf = parseCF(item.customFields);
         return {
-          inwardNumber: h.inwardNumber, date: eExtra.date || h.createdAt,
+          inwardNumber: h.inwardNumber, date: fmtDateExport(h.inwardDate || eExtra.date || h.createdAt),
           gateSerialNo: h.gateSerialNo, invoiceNumber: h.invoiceNumber,
           sapDocumentNo: h.sapDocumentNo, source: h.source, category: h.category,
           truckNumber: h.truckNumber, transporter: h.transporter,
@@ -57,7 +76,8 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
           invoiceNetWeight: cf.invoiceNetWeight, receivedQtyInPallets: cf.receivedQtyInPallets,
           receivedQtyInNos: cf.receivedQtyInNos, receivedNetWeight: cf.receivedNetWeight,
           numberOfBoxes: cf.numberOfBoxes, shortInPallet: cf.shortInPallet,
-          shortExcessInKg: cf.shortExcessInKg, discrepancyRemarks: cf.discrepancyRemarks,
+          shortExcessInQty: cf.shortExcessInQty, shortExcessInKg: cf.shortExcessInKg,
+          discrepancyRemarks: cf.discrepancyRemarks,
         };
       });
     });
@@ -77,7 +97,7 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
       return lineItems.map((item: any) => {
         const cf = parseCF(item.customFields);
         return {
-          outwardNumber: h.outwardNumber, dispatchDate: h.dispatchDate || h.createdAt,
+          outwardNumber: h.outwardNumber, dispatchDate: fmtDateExport(h.dispatchDate || h.createdAt),
           truckNumber: h.truckNumber, transporter: h.transporter,
           source: src, destination: h.destination,
           sapDocumentNo: h.sapDocumentNo, lrNumber, status: h.status,
@@ -93,14 +113,35 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
     return rows.map((item: any) => {
       const cf = parseCF(item.customFields);
       return {
-        materialCode: item.material?.code, description: item.material?.description,
-        materialType: cf.materialType || item.material?.materialType,
-        invoiceNo: cf.invoiceNo || item.batchNumber, category: cf.category || item.material?.category,
-        huUnit: cf.huUnit || item.material?.huUnit, quantity: item.quantity,
-        netWeight: cf.netWeight, pallets: cf.pallets, numberOfBoxes: cf.numberOfBoxes,
-        binLocation: cf.binLocation, stockLocation: cf.stockLocation,
-        sapDocNo: cf.sapDocNo, source: cf.source,
-        receiptDate: item.receiptDate, stockStatus: item.stockStatus,
+        materialCode:        item.material?.code,
+        description:         item.material?.description,
+        category:            cf.category || item.material?.category,
+        materialType:        cf.materialType || item.material?.materialType,
+        huUnit:              cf.huUnit || item.material?.huUnit,
+        invoiceNo:           cf.invoiceNo || item.batchNumber,
+        quantity:            item.quantity,
+        invoiceQtyInNos:     cf.invoiceQtyInNos,
+        receivedQtyInNos:    cf.receivedQtyInNos,
+        netWeight:           cf.netWeight,
+        invoiceNetWeight:    cf.invoiceNetWeight,
+        receivedNetWeight:   cf.receivedNetWeight,
+        pallets:             cf.pallets,
+        invoiceQtyInPallet:  cf.invoiceQtyInPallet,
+        receivedQtyInPallets:cf.receivedQtyInPallets,
+        numberOfBoxes:       cf.numberOfBoxes,
+        binLocation:         cf.binLocation,
+        stockLocation:       cf.stockLocation,
+        inwardDate:          fmtDateExport(cf.inwardDate || item.receiptDate),
+        sapDocNo:            cf.sapDocNo,
+        gateSerialNo:        cf.gateSerialNo,
+        source:              cf.source,
+        createdBy:           cf.createdBy,
+        shortInPallet:       cf.shortInPallet,
+        shortExcessInKg:     cf.shortExcessInKg,
+        shortExcessInQty:    cf.shortExcessInQty,
+        discrepancyRemarks:  cf.discrepancyRemarks,
+        tatRemarks:          cf.tatRemarks,
+        stockStatus:         item.stockStatus,
       };
     });
   }
@@ -110,10 +151,10 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
 
 // Numeric fields to sum per report type for the totals row
 const TOTAL_FIELDS: Partial<Record<ReportType, string[]>> = {
-  inward: ['invoiceQtyInPallet','receivedQtyInPallets','invoiceNetWeight','receivedNetWeight','numberOfBoxes','shortInPallet','shortExcessInKg'],
+  inward: ['invoiceQtyInPallet','receivedQtyInPallets','invoiceNetWeight','receivedNetWeight','numberOfBoxes','shortInPallet','shortExcessInQty','shortExcessInKg'],
   outward: ['pickedQty'],
-  inventory: ['quantity','pallets','netWeight','numberOfBoxes'],
-  discrepancy: ['invoiceQtyInPallet','receivedQtyInPallets','invoiceNetWeight','receivedNetWeight','shortInPallet','shortExcessInKg'],
+  inventory: ['quantity','pallets','netWeight','numberOfBoxes','invoiceQtyInNos','receivedQtyInNos','invoiceNetWeight','receivedNetWeight','invoiceQtyInPallet','receivedQtyInPallets','shortInPallet','shortExcessInQty','shortExcessInKg'],
+  discrepancy: ['invoiceQtyInPallet','receivedQtyInPallets','invoiceNetWeight','receivedNetWeight','shortInPallet','shortExcessInQty','shortExcessInKg'],
 };
 
 function appendTotalsRow(flat: any[], type: ReportType): any[] {
@@ -251,7 +292,7 @@ function InwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (id
               {/* ── Entry-level columns (rowspan) */}
               {isFirst && <>
                 <td style={{...TD,fontFamily:'monospace',fontWeight:700,color:'#1e40af',verticalAlign:'middle'}} rowSpan={spanCount}>{entry.inwardNumber}</td>
-                <td style={{...TD,verticalAlign:'middle'}} rowSpan={spanCount}>{fmtDate(eCF.date || entry.createdAt)}</td>
+                <td style={{...TD,verticalAlign:'middle'}} rowSpan={spanCount}>{fmtDate(entry.inwardDate || eCF.date || entry.createdAt)}</td>
                 <td style={{...TD,verticalAlign:'middle'}} rowSpan={spanCount}>{entry.truckNumber||'—'}</td>
                 <td style={{...TD,verticalAlign:'middle'}} rowSpan={spanCount}>{entry.transporter||'—'}</td>
                 <td style={{...TD,verticalAlign:'middle'}} rowSpan={spanCount}>{entry.source||'—'}</td>
@@ -263,7 +304,7 @@ function InwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (id
               {/* ── Line-item columns */}
               {item ? <>
                 <td style={{...TD,fontFamily:'monospace',fontWeight:700,color:'#1e40af'}}>{item.materialCode||'—'}</td>
-                <td style={{...TD,maxWidth:'160px',overflow:'hidden',textOverflow:'ellipsis'}}>{item.description||'—'}</td>
+                <td style={{...TD,minWidth:'180px',whiteSpace:'normal',wordBreak:'break-word'}}>{item.description||'—'}</td>
                 <td style={TD}>{cf.materialType||'—'}</td>
                 <td style={{...TD,fontWeight:700,color:'#1e40af'}}>{item.huUnit||cf.huUnit||'—'}</td>
                 <td style={{...TD}}>
@@ -358,7 +399,7 @@ function OutwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (i
               </>}
               {item ? <>
                 <td style={{...TD,fontFamily:'monospace',fontWeight:700,color:'#1e40af'}}>{item.materialCode||'—'}</td>
-                <td style={{...TD,maxWidth:'160px',overflow:'hidden',textOverflow:'ellipsis'}}>{cf.description||item.description||'—'}</td>
+                <td style={{...TD,minWidth:'180px',whiteSpace:'normal',wordBreak:'break-word'}}>{cf.description||item.description||'—'}</td>
                 <td style={TD}>{cf.materialType||'—'}</td>
                 <td style={{...TD,fontWeight:700,color:'#1e40af'}}>{cf.huUnit||'—'}</td>
                 <td style={{...TD,fontFamily:'monospace',fontSize:'10px'}}>{cf.invoiceNo||item.batchNumber||'—'}</td>
@@ -396,31 +437,60 @@ function OutwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (i
 function InventoryTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (id: string) => void; canDelete?: boolean }) {
   const totals = rows.reduce((acc, r) => {
     const cf = parseCF(r.customFields);
-    return { qty: acc.qty + (Number(r.quantity)||0), netWeight: acc.netWeight + (Number(cf.netWeight)||0), pallets: acc.pallets + (Number(cf.pallets)||0) };
-  }, { qty: 0, netWeight: 0, pallets: 0 });
+    return {
+      invoiceQtyInPallet:   acc.invoiceQtyInPallet   + (Number(cf.invoiceQtyInPallet)||0),
+      receivedQtyInPallets: acc.receivedQtyInPallets + (Number(cf.receivedQtyInPallets)||0),
+      invoiceNetWeight:     acc.invoiceNetWeight     + (Number(cf.invoiceNetWeight)||0),
+      receivedNetWeight:    acc.receivedNetWeight    + (Number(cf.receivedNetWeight)||0),
+    };
+  }, { invoiceQtyInPallet: 0, receivedQtyInPallets: 0, invoiceNetWeight: 0, receivedNetWeight: 0 });
+  const headers = [
+    'Material Code','Description','Category','Type of Material','HU Unit',
+    'Invoice No.','SAP Doc No','Gate Serial',
+    'Invoice Plt','Rcvd Plt','Invoice Nos','Rcvd Nos','Invoice Wt (kg)','Rcvd Wt (kg)',
+    'BIN','Stock Location','Inward Date','Created By',
+    'Short Pallet','Short/Excess Qty','Short/Excess Kg','Discrepancy Remarks','TAT Remarks',
+    'Status','',
+  ];
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead><tr>
-        {['Material Code','Description','Invoice No.','Category','Type of Material','Qty (Nos)','Net Weight','Pallets','BIN','Stock Location','Receipt Date','Status',''].map(h =>
-          <th key={h} style={TH}>{h}</th>)}
-      </tr></thead>
+      <thead><tr>{headers.map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
       <tbody>{rows.map((r, i) => {
         const cf = parseCF(r.customFields);
         const matType = cf.materialType || r.material?.materialType || '—';
+        const isDisc = !!(cf.discrepancy || r.stockStatus === 'DISCREPANCY' ||
+          Number(cf.shortInPallet||0) !== 0 || Number(cf.shortExcessInKg||0) !== 0 ||
+          Number(cf.shortExcessInQty||0) !== 0 || cf.discrepancyRemarks);
+        const rowBg = isDisc ? '#fff5f5' : (i%2===0 ? '#fff' : '#f8fafc');
+        const statusBg = r.stockStatus==='GOOD'?'#ecfdf5':r.stockStatus==='DISCREPANCY'?'#fef2f2':'#fef2f2';
+        const statusColor = r.stockStatus==='GOOD'?'#059669':r.stockStatus==='DISCREPANCY'?'#b91c1c':'#dc2626';
+        const statusBorder = r.stockStatus==='GOOD'?'#a7f3d0':r.stockStatus==='DISCREPANCY'?'#f87171':'#fecaca';
         return (
-          <tr key={r.id} style={{ background: i%2===0?'#fff':'#f8fafc' }}>
+          <tr key={r.id} style={{ background: rowBg, borderLeft: isDisc ? '3px solid #dc2626' : '3px solid transparent' }}>
             <td style={{...TD,fontFamily:'monospace',fontWeight:700,color:'#1e40af'}}>{r.material?.code||'—'}</td>
-            <td style={{...TD,maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis'}}>{r.material?.description||'—'}</td>
-            <td style={{...TD,fontFamily:'monospace',fontSize:'10px'}}>{cf.invoiceNo||r.batchNumber||'—'}</td>
+            <td style={{...TD,minWidth:'180px',whiteSpace:'normal',wordBreak:'break-word'}}>{r.material?.description||'—'}</td>
             <td style={TD}><span style={{background:String(cf.category||'').includes('FG')?'#f5f3ff':'#ecfdf5',color:String(cf.category||'').includes('FG')?'#7c3aed':'#059669',border:`1px solid ${String(cf.category||'').includes('FG')?'#ddd6fe':'#a7f3d0'}`,borderRadius:'20px',padding:'1px 8px',fontSize:'10px',fontWeight:700}}>{cf.category||r.material?.category||'—'}</span></td>
             <td style={{...TD,color:'#0891b2',fontWeight:600}}>{matType}</td>
-            <td style={{...TD,textAlign:'right',fontWeight:700}}>{Number(r.quantity).toFixed(2)}</td>
-            <td style={{...TD,textAlign:'right'}}>{cf.netWeight?`${Number(cf.netWeight).toFixed(2)} kg`:'—'}</td>
-            <td style={{...TD,textAlign:'right'}}>{cf.pallets||'—'}</td>
+            <td style={TD}>{cf.huUnit||r.material?.huUnit||'—'}</td>
+            <td style={{...TD,fontFamily:'monospace',fontSize:'10px'}}>{cf.invoiceNo||r.batchNumber||'—'}</td>
+            <td style={{...TD,fontFamily:'monospace',fontSize:'10px'}}>{cf.sapDocNo||'—'}</td>
+            <td style={{...TD,fontFamily:'monospace',fontSize:'10px'}}>{cf.gateSerialNo||'—'}</td>
+            <td style={{...TD,textAlign:'right'}}>{cf.invoiceQtyInPallet||'—'}</td>
+            <td style={{...TD,textAlign:'right'}}>{cf.receivedQtyInPallets||'—'}</td>
+            <td style={{...TD,textAlign:'right'}}>{cf.invoiceQtyInNos||'—'}</td>
+            <td style={{...TD,textAlign:'right'}}>{cf.receivedQtyInNos||'—'}</td>
+            <td style={{...TD,textAlign:'right'}}>{cf.invoiceNetWeight?`${Number(cf.invoiceNetWeight).toFixed(2)}`:'—'}</td>
+            <td style={{...TD,textAlign:'right'}}>{cf.receivedNetWeight?`${Number(cf.receivedNetWeight).toFixed(2)}`:'—'}</td>
             <td style={{...TD,fontFamily:'monospace',color:'#7c3aed'}}>{cf.binLocation||'—'}</td>
             <td style={TD}>{cf.stockLocation||'—'}</td>
-            <td style={TD}>{fmtDate(r.receiptDate)}</td>
-            <td style={TD}><span style={{background:r.stockStatus==='GOOD'?'#ecfdf5':'#fef2f2',color:r.stockStatus==='GOOD'?'#059669':'#dc2626',border:`1px solid ${r.stockStatus==='GOOD'?'#a7f3d0':'#fecaca'}`,borderRadius:'20px',padding:'1px 8px',fontSize:'10px',fontWeight:700}}>{r.stockStatus}</span></td>
+            <td style={TD}>{cf.inwardDate || fmtDate(r.receiptDate)}</td>
+            <td style={TD}>{cf.createdBy||'—'}</td>
+            <td style={{...TD,textAlign:'right',color:Number(cf.shortInPallet||0)!==0?'#b91c1c':'#374151',fontWeight:Number(cf.shortInPallet||0)!==0?700:400}}>{cf.shortInPallet||'—'}</td>
+            <td style={{...TD,textAlign:'right',color:Number(cf.shortExcessInQty||0)!==0?'#b91c1c':'#374151',fontWeight:Number(cf.shortExcessInQty||0)!==0?700:400}}>{cf.shortExcessInQty||'—'}</td>
+            <td style={{...TD,textAlign:'right',color:Number(cf.shortExcessInKg||0)!==0?'#b91c1c':'#374151',fontWeight:Number(cf.shortExcessInKg||0)!==0?700:400}}>{cf.shortExcessInKg||'—'}</td>
+            <td style={{...TD,color:'#b91c1c',maxWidth:'140px',overflow:'hidden',textOverflow:'ellipsis'}}>{cf.discrepancyRemarks||'—'}</td>
+            <td style={{...TD,maxWidth:'120px',overflow:'hidden',textOverflow:'ellipsis'}}>{cf.tatRemarks||'—'}</td>
+            <td style={TD}><span style={{background:statusBg,color:statusColor,border:`1px solid ${statusBorder}`,borderRadius:'20px',padding:'1px 8px',fontSize:'10px',fontWeight:700}}>{r.stockStatus}</span></td>
             <td style={{...TD,textAlign:'center'}}><DeleteBtn onDelete={() => onDelete(r.id)} canDelete={canDelete} /></td>
           </tr>
         );
@@ -428,11 +498,13 @@ function InventoryTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: 
       </tbody>
       <tfoot>
         <tr style={{background:'#eff6ff',fontWeight:800,borderTop:'2px solid #bfdbfe'}}>
-          <td style={{...TD,color:'#1e3a8a'}} colSpan={5}>TOTAL ({rows.length} items)</td>
-          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.qty.toFixed(2)}</td>
-          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.netWeight.toFixed(2)} kg</td>
-          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.pallets.toFixed(2)}</td>
-          <td colSpan={5} style={TD}></td>
+          <td style={{...TD,color:'#1e3a8a'}} colSpan={8}>TOTAL ({rows.length} items)</td>
+          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.invoiceQtyInPallet.toFixed(0)}</td>
+          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.receivedQtyInPallets.toFixed(0)}</td>
+          <td colSpan={2} style={TD}></td>
+          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.invoiceNetWeight.toFixed(2)} kg</td>
+          <td style={{...TD,textAlign:'right',color:'#1e3a8a'}}>{totals.receivedNetWeight.toFixed(2)} kg</td>
+          <td colSpan={11} style={TD}></td>
         </tr>
       </tfoot>
     </table>
@@ -478,7 +550,7 @@ function DiscrepancyTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete
       <thead><tr>
         {['Inward No.','Date','Truck','Source','Invoice No.','Material Code','Type of Material','Description','HU Unit',
           'Inv Qty (Plt)','Inv Qty (Nos)','Inv Wt (kg)','Rcvd (Plt)','Rcvd (Nos)','Rcvd Wt (kg)',
-          'Short (Plt)','Short/Excess (kg)','Remarks',''].map(h => <th key={h} style={TH}>{h}</th>)}
+          'Short (Plt)','Short/Excess (Qty)','Short/Excess (kg)','Remarks',''].map(h => <th key={h} style={TH}>{h}</th>)}
       </tr></thead>
       <tbody>{rows.map((r, i) => {
         const isShort = Number(r.shortInPallet || 0) < 0 || Number(r.shortExcessInKg || 0) < 0;
@@ -502,6 +574,9 @@ function DiscrepancyTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete
             <td style={{...TD, textAlign:'right'}}>{r.receivedNetWeight ?? '—'}</td>
             <td style={{...TD, textAlign:'right', fontWeight:800, color: Number(r.shortInPallet||0) < 0 ? '#dc2626' : Number(r.shortInPallet||0) > 0 ? '#d97706' : '#059669'}}>
               {Number(r.shortInPallet||0) > 0 ? `+${r.shortInPallet}` : r.shortInPallet || '0'}
+            </td>
+            <td style={{...TD, textAlign:'right', fontWeight:800, color: Number(r.shortExcessInQty||0) < 0 ? '#dc2626' : Number(r.shortExcessInQty||0) > 0 ? '#d97706' : '#059669'}}>
+              {Number(r.shortExcessInQty||0) > 0 ? `+${r.shortExcessInQty}` : r.shortExcessInQty || '0'}
             </td>
             <td style={{...TD, textAlign:'right', fontWeight:800, color: Number(r.shortExcessInKg||0) < 0 ? '#dc2626' : Number(r.shortExcessInKg||0) > 0 ? '#d97706' : '#059669'}}>
               {Number(r.shortExcessInKg||0) > 0 ? `+${r.shortExcessInKg}` : r.shortExcessInKg || '0'}
@@ -549,8 +624,9 @@ export default function Reports() {
   // Shared category filter (RM / FG / ALL) — applies to all tabs
   const [catFilter, setCatFilter]               = useState<'ALL' | 'RM' | 'FG'>('ALL');
   // Type-of-material sub-filters (inward + inventory only)
-  const [inwardTypeFilter, setInwardTypeFilter] = useState<string>('');
+  const [inwardTypeFilter, setInwardTypeFilter]       = useState<string>('');
   const [inventoryTypeFilter, setInventoryTypeFilter] = useState<string>('');
+  const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'' | 'GOOD' | 'DISCREPANCY'>('');
   // Presentation Report panel
   const [showPptPanel, setShowPptPanel]         = useState(false);
   const [pptMonth, setPptMonth]                 = useState(new Date().getMonth() + 1);
@@ -965,15 +1041,19 @@ export default function Reports() {
     });
     return Array.from(types).sort();
   })();
-  const inventoryDisplayRows: any[] = (catFilter !== 'ALL' || inventoryTypeFilter)
-    ? filteredRows.filter((r: any) => {
-        const cf = parseCF(r.customFields);
-        const cat = cf.category || r.material?.category || '';
-        if (!matchCat(cat)) return false;
-        if (inventoryTypeFilter && (cf.materialType || r.material?.materialType || '') !== inventoryTypeFilter) return false;
-        return true;
-      })
-    : filteredRows;
+  const inventoryDisplayRows: any[] = filteredRows.filter((r: any) => {
+    const cf = parseCF(r.customFields);
+    const cat = cf.category || r.material?.category || '';
+    if (catFilter !== 'ALL' && !matchCat(cat)) return false;
+    if (inventoryTypeFilter && (cf.materialType || r.material?.materialType || '') !== inventoryTypeFilter) return false;
+    if (inventoryStatusFilter) {
+      const isDisc = !!(cf.discrepancy || r.stockStatus === 'DISCREPANCY' ||
+        Number(cf.shortInPallet||0) !== 0 || Number(cf.shortExcessInKg||0) !== 0 || cf.discrepancyRemarks);
+      if (inventoryStatusFilter === 'DISCREPANCY' && !isDisc) return false;
+      if (inventoryStatusFilter === 'GOOD' && isDisc) return false;
+    }
+    return true;
+  });
 
   // ── Cycle Count: filter at record level ────────────────────────────────────
   const cycleDisplayRows: any[] = catFilter !== 'ALL'
@@ -1013,13 +1093,26 @@ export default function Reports() {
     if (!activeTab || filteredRows.length === 0) return;
     if (!window.confirm(`Remove ALL ${filteredRows.length} record(s) in this report? This cannot be undone.`)) return;
     setDeleteError(null);
-    try {
-      await Promise.all(filteredRows.map(r =>
-        fetch(`${API}${deleteEndpoint(activeTab, r.id)}`, { method: 'DELETE' })
-      ));
-      setRows(prev => prev.filter(r => !filteredRows.some(fr => fr.id === r.id)));
-    } catch (e: any) {
-      setDeleteError('Some records could not be deleted. Reload the report to see current state.');
+    const deletedIds: string[] = [];
+    const failures: string[] = [];
+    await Promise.all(filteredRows.map(async r => {
+      try {
+        const res = await fetch(`${API}${deleteEndpoint(activeTab, r.id)}`, { method: 'DELETE' });
+        if (res.ok) {
+          deletedIds.push(r.id);
+        } else {
+          const d = await res.json().catch(() => ({}));
+          failures.push(d.error || `Failed to delete ${r.id}`);
+        }
+      } catch {
+        failures.push(`Network error deleting ${r.id}`);
+      }
+    }));
+    if (deletedIds.length > 0) {
+      setRows(prev => prev.filter(r => !deletedIds.includes(r.id)));
+    }
+    if (failures.length > 0) {
+      setDeleteError(`${failures.length} record(s) could not be deleted. Reload to see current state.`);
     }
   };
 
@@ -1303,8 +1396,21 @@ export default function Reports() {
                 </select>
               </>
             )}
-            {(catFilter !== 'ALL' || inwardTypeFilter || inventoryTypeFilter) && (
-              <button onClick={() => { setCatFilter('ALL'); setInwardTypeFilter(''); setInventoryTypeFilter(''); }}
+            {/* Inventory: status sub-filter */}
+            {activeTab === 'inventory' && (
+              <>
+                <div style={{ width: '1px', height: '20px', background: '#e2e8f0' }} />
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#374151' }}>Status:</span>
+                <select value={inventoryStatusFilter} onChange={e => setInventoryStatusFilter(e.target.value as '' | 'GOOD' | 'DISCREPANCY')}
+                  style={{ border: '1.5px solid #e2e8f0', borderRadius: '8px', padding: '4px 10px', fontSize: '12px', color: '#374151', background: '#fff', cursor: 'pointer' }}>
+                  <option value="">All</option>
+                  <option value="GOOD">Approved</option>
+                  <option value="DISCREPANCY">Discrepancy</option>
+                </select>
+              </>
+            )}
+            {(catFilter !== 'ALL' || inwardTypeFilter || inventoryTypeFilter || inventoryStatusFilter) && (
+              <button onClick={() => { setCatFilter('ALL'); setInwardTypeFilter(''); setInventoryTypeFilter(''); setInventoryStatusFilter(''); }}
                 style={{ fontSize: '11px', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700 }}>
                 Clear
               </button>

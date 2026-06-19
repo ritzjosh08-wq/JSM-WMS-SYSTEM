@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Users, Shield, Warehouse, Check, RefreshCw, Save, UserPlus, Trash2, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Settings as SettingsIcon, Users, Shield, Warehouse, Check, RefreshCw, Save, UserPlus, Trash2, Eye, EyeOff, AlertCircle, Database } from 'lucide-react';
 
 const API = 'http://localhost:5001/api';
 
@@ -38,6 +38,11 @@ export default function Settings() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createOk, setCreateOk] = useState(false);
+
+  // Danger zone — wipe all data
+  const [wipeConfirmText, setWipeConfirmText] = useState('');
+  const [wiping, setWiping]   = useState(false);
+  const [wipeResult, setWipeResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [deletingUser, setDeletingUser] = useState<string | null>(null);
 
   const load = async () => {
@@ -396,6 +401,80 @@ export default function Settings() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* ── Danger Zone */}
+      <div style={{ background: '#fff', borderRadius: '16px', border: '2px solid #fecaca', padding: '28px', marginTop: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+          <div style={{ background: '#fef2f2', borderRadius: '10px', padding: '8px', display: 'flex' }}>
+            <Database size={18} color="#dc2626" />
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '15px', color: '#991b1b' }}>Danger Zone — Wipe All Data</div>
+            <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '2px' }}>
+              Permanently deletes all Inward, Outward, Inventory, Material Master, Reports and related records. User accounts and warehouse structure are kept. <strong>This cannot be undone.</strong>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ background: '#fef2f2', borderRadius: '10px', padding: '16px', marginTop: '16px', border: '1px solid #fecaca' }}>
+          <div style={{ fontSize: '13px', color: '#7f1d1d', fontWeight: 600, marginBottom: '10px' }}>
+            Type <code style={{ background: '#fee2e2', padding: '1px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>DELETE ALL DATA</code> to confirm:
+          </div>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <input
+              type="text"
+              value={wipeConfirmText}
+              onChange={e => { setWipeConfirmText(e.target.value); setWipeResult(null); }}
+              placeholder="DELETE ALL DATA"
+              style={{
+                flex: 1, padding: '10px 14px', borderRadius: '8px',
+                border: '1.5px solid #fca5a5', fontSize: '13px', fontFamily: 'monospace',
+                outline: 'none', background: '#fff',
+              }}
+            />
+            <button
+              disabled={wipeConfirmText !== 'DELETE ALL DATA' || wiping}
+              onClick={async () => {
+                if (wipeConfirmText !== 'DELETE ALL DATA') return;
+                setWiping(true);
+                setWipeResult(null);
+                try {
+                  const res = await fetch(`${API}/inventory/reset-all`, { method: 'DELETE' });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json.error || 'Reset failed');
+                  setWipeResult({ ok: true, msg: 'All data wiped successfully. The system is now empty.' });
+                  setWipeConfirmText('');
+                } catch (err: any) {
+                  setWipeResult({ ok: false, msg: err.message });
+                } finally {
+                  setWiping(false);
+                }
+              }}
+              style={{
+                padding: '10px 20px', borderRadius: '8px', fontWeight: 700, fontSize: '13px',
+                border: 'none', cursor: wipeConfirmText === 'DELETE ALL DATA' && !wiping ? 'pointer' : 'not-allowed',
+                background: wipeConfirmText === 'DELETE ALL DATA' && !wiping ? '#dc2626' : '#fca5a5',
+                color: '#fff', display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap',
+              }}
+            >
+              {wiping ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={14} />}
+              {wiping ? 'Wiping…' : 'Wipe All Data'}
+            </button>
+          </div>
+          {wipeResult && (
+            <div style={{
+              marginTop: '10px', padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 600,
+              background: wipeResult.ok ? '#ecfdf5' : '#fef2f2',
+              color: wipeResult.ok ? '#059669' : '#dc2626',
+              border: `1px solid ${wipeResult.ok ? '#a7f3d0' : '#fca5a5'}`,
+              display: 'flex', alignItems: 'center', gap: '8px',
+            }}>
+              {wipeResult.ok ? <Check size={14} /> : <AlertCircle size={14} />}
+              {wipeResult.msg}
+            </div>
+          )}
+        </div>
       </div>
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

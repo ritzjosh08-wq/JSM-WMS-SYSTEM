@@ -4,7 +4,6 @@ import { PrismaClient } from '@prisma/client';
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// GET all outward dispatches (for reports)
 router.get('/', async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -34,11 +33,7 @@ router.get('/fifo', async (req, res) => {
     if (!material) return res.json({ recommendations: [] });
 
     const batches = await prisma.inventoryBatch.findMany({
-      where: {
-        materialId: material.id,
-        quantity: { gt: 0 },
-        stockStatus: "GOOD"
-      },
+      where: { materialId: material.id, quantity: { gt: 0 }, stockStatus: "GOOD" },
       include: { warehouse: true, rack: true, floorLocation: true },
       orderBy: { receiptDate: 'asc' }
     });
@@ -74,17 +69,10 @@ router.get('/fifo', async (req, res) => {
   }
 });
 
-// POST /dispatch — supports multi-material dispatch in one call
-// New format: { truckNumber, transporter, destination, sapDocumentNo, lrNumber, date,
-//              lines: [{ materialCode, materialType, description, requiredQty,
-//                        picks: [{ batchId, batchNumber, pickQty, warehouseId }] }] }
-// Old single-material format still supported for backwards compat:
-//   { materialCode, requiredQty, truckNumber, ..., picks: [...] }
 router.post('/dispatch', async (req, res) => {
   try {
     const data = req.body;
 
-    // Normalise to lines array
     const lines: any[] = data.lines || [{
       materialCode: data.materialCode,
       materialType: data.materialType || '',
@@ -102,22 +90,20 @@ router.post('/dispatch', async (req, res) => {
         requiredQty:  line.requiredQty,
         pickedQty:    pick.pickQty,
         warehouseId:  pick.warehouseId,
-        // pack all extra fields into customFields — no schema change needed
         customFields: JSON.stringify({
-          description:  line.description  || '',
-          materialType: line.materialType || '',
-          huUnit:       line.huUnit       || '',
-          category:     line.category     || '',
+          description:   line.description  || '',
+          materialType:  line.materialType || '',
+          huUnit:        line.huUnit       || '',
+          category:      line.category     || '',
           stockLocation: pick.stockLocation || '',
         }),
       }))
     );
 
-    // pack lrNumber + createdBy into remarks alongside source — no schema change needed
     const remarksParts: string[] = [];
-    if (data.source)     remarksParts.push(`Source: ${data.source}`);
-    if (data.lrNumber)   remarksParts.push(`LR: ${data.lrNumber}`);
-    if (data.createdBy)  remarksParts.push(`Created By: ${data.createdBy}`);
+    if (data.source)    remarksParts.push('Source: ' + data.source);
+    if (data.lrNumber)  remarksParts.push('LR: ' + data.lrNumber);
+    if (data.createdBy) remarksParts.push('Created By: ' + data.createdBy);
 
     const outward = await prisma.outwardEntry.create({
       data: {
@@ -133,18 +119,60 @@ router.post('/dispatch', async (req, res) => {
       }
     });
 
-    // Reduce inventory for all picks across all lines
     for (const line of lines) {
       for (const pick of (line.picks || [])) {
         const batch = await prisma.inventoryBatch.findUnique({ where: { id: pick.batchId } });
         if (batch) {
           const newQty = Math.max(0, batch.quantity - pick.pickQty);
-          await prisma.inventoryBatch.update({
-            where: { id: batch.id },
-            data: { quantity: newQty, lastMovementDate: new Date() },
-          });
 
-          // Update warehouse used capacity
+          let cf: any = {};
+          try { cf = JSON.parse(batch.customFields || '{}'); } catch {}
+
+          const hasDiscrepancy =
+            batch.stockStatus === "DISCREPANCY" ||
+            Number(cf.shortInPallet   || 0) !== 0 ||
+            Number(cf.shortExcessInKg  || 0) !== 0 ||
+            Number(cf.shortExcessInQty || 0) !== 0 ||
+            !!cf.discrepancyRemarks ||
+            !!cf.discrepancy;
+
+          const invoiceQty = Number(cf.invoiceQtyInNos || 0);
+          const shouldAutoRectify = hasDiscrepancy && invoiceQty > 0 && newQty === invoiceQty;
+
+          if (shouldAutoRectify) {
+            const rectHistory = Array.isArray(cf.rectificationHistory) ? cf.rectificationHistory : [];
+            const newCf = Object.assign({}, cf, {
+              shortInPallet:      0,
+              shortExcessInKg:    0,
+              shortExcessInQty:   0,
+              discrepancyRemarks: '',
+              discrepancy:        false,
+              receivedQtyInNos:   newQty,
+              rectificationHistory: rectHistory.concat([{
+                rectifiedAt:   new Date().toISOString(),
+                remarks:       'Auto-rectified via outbound dispatch of ' + pick.pickQty + ' units. Remaining ' + newQty + ' matches invoice qty ' + invoiceQty + '.',
+                autoRectified: true,
+                dispatchedQty: pick.pickQty,
+                remainingQty:  newQty,
+                invoiceQty:    invoiceQty,
+              }]),
+            });
+            await prisma.inventoryBatch.update({
+              where: { id: batch.id },
+              data: {
+                quantity:        newQty,
+                stockStatus:     'GOOD',
+                lastMovementDate: new Date(),
+                customFields:    JSON.stringify(newCf),
+              },
+            });
+          } else {
+            await prisma.inventoryBatch.update({
+              where: { id: batch.id },
+              data: { quantity: newQty, lastMovementDate: new Date() },
+            });
+          }
+
           const wh = await prisma.warehouse.findUnique({ where: { id: batch.warehouseId } });
           if (wh) {
             await prisma.warehouse.update({
@@ -156,15 +184,14 @@ router.post('/dispatch', async (req, res) => {
       }
     }
 
-    // Truck movement record
     await prisma.truckMovement.create({
       data: {
-        truckNumber:   data.truckNumber,
-        movementType:  "OUTBOUND",
-        status:        "DISPATCHED",
-        transporter:   data.transporter  || null,
-        source:        data.source       || null,
-        destination:   data.destination  || null,
+        truckNumber:  data.truckNumber,
+        movementType: 'OUTBOUND',
+        status:       'DISPATCHED',
+        transporter:  data.transporter || null,
+        source:       data.source      || null,
+        destination:  data.destination || null,
       }
     });
 

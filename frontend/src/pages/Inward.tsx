@@ -16,7 +16,7 @@ export interface ManualEntryPayload {
   actualDescription: string; binLocation: string; invoiceQtyInPallet: number; invoiceQtyInNos: number; invoiceNetWeight: number;
   receivedQtyInPallets: number; receivedQtyInNos: number; receivedQtyInKgs: number; receivedNetWeight: number;
   netWeight: number; receivedPalletCount: number; numberOfBoxes: number; boxPerKg: number; shortInPallet: number;
-  shortExcessInKg: number; remarks: string; discrepancyRemarks: string; status: string;
+  shortExcessInKg: number; shortExcessInQty: number; remarks: string; discrepancyRemarks: string; status: string;
   materialType: string;
 }
 
@@ -55,7 +55,7 @@ const EMPTY_ENTRY: Omit<ManualEntry, "id"> = {
   invoiceQtyInPallet: 0, invoiceQtyInNos: 0, invoiceNetWeight: 0,
   receivedQtyInPallets: 0, receivedQtyInNos: 0, receivedQtyInKgs: 0,
   receivedNetWeight: 0, netWeight: 0, receivedPalletCount: 0,
-  numberOfBoxes: 0, boxPerKg: 0, shortInPallet: 0, shortExcessInKg: 0,
+  numberOfBoxes: 0, boxPerKg: 0, shortInPallet: 0, shortExcessInKg: 0, shortExcessInQty: 0,
   remarks: "", discrepancyRemarks: "",
 };
 
@@ -527,8 +527,9 @@ const EntryRow = ({
 
   // Flag as discrepancy if: explicit short/excess, status set, or any qty/HU diff
   const hasDiscrepancy =
-    (entry.shortInPallet   || 0) !== 0 ||
-    (entry.shortExcessInKg || 0) !== 0 ||
+    (entry.shortInPallet    || 0) !== 0 ||
+    (entry.shortExcessInKg  || 0) !== 0 ||
+    (entry.shortExcessInQty || 0) !== 0 ||
     entry.entryStatus === "DISCREPANCY" ||
     ((entry.receivedQtyInPallets || 0) > 0 && diffPallets !== 0) ||
     ((entry.receivedQtyInNos     || 0) > 0 && diffNos     !== 0) ||
@@ -742,6 +743,12 @@ const EntryFormModal = ({
     }
   }, [form.invoiceNetWeight, form.receivedNetWeight]);
 
+  useEffect(() => {
+    if (form.invoiceQtyInNos && form.receivedQtyInNos) {
+      setForm((p) => ({ ...p, shortExcessInQty: (p.receivedQtyInNos || 0) - (p.invoiceQtyInNos || 0) }));
+    }
+  }, [form.invoiceQtyInNos, form.receivedQtyInNos]);
+
   const gridCols = (n: number) => `grid grid-cols-${n} gap-4 mb-5`;
 
   return (
@@ -869,10 +876,12 @@ const EntryFormModal = ({
           {/* ── Row 5: Short / Excess (auto) */}
           <div className="bg-amber-50/40 rounded-xl p-5 border border-amber-100">
             <SectionHeader icon={<FileText size={15} />} title="Short / Discrepancy (auto-calculated)" color="amber" />
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Short in Pallet"      type="number" step="0.01" value={form.shortInPallet || ""}
+            <div className="grid grid-cols-3 gap-4">
+              <Field label="Short in Pallet"        type="number" step="0.01" value={form.shortInPallet || ""}
                 onChange={(v) => set("shortInPallet")(parseFloat(v) || 0)} readOnly />
-              <Field label="Short / Excess in Kg" type="number" step="0.01" value={form.shortExcessInKg || ""}
+              <Field label="Short / Excess in Qty"  type="number" step="1"    value={form.shortExcessInQty || ""}
+                onChange={(v) => set("shortExcessInQty")(parseFloat(v) || 0)} readOnly />
+              <Field label="Short / Excess in Kg"   type="number" step="0.01" value={form.shortExcessInKg || ""}
                 onChange={(v) => set("shortExcessInKg")(parseFloat(v) || 0)} readOnly />
             </div>
           </div>
@@ -943,8 +952,9 @@ const isSpecificHU = (hu: string | undefined | null): boolean => {
 
 // Returns true if the entry has any detectable discrepancy (qty diff or explicit short/excess)
 const hasEntryDiscrepancy = (e: ManualEntry): boolean =>
-  (e.shortInPallet   || 0) !== 0 ||
-  (e.shortExcessInKg || 0) !== 0 ||
+  (e.shortInPallet    || 0) !== 0 ||
+  (e.shortExcessInKg  || 0) !== 0 ||
+  (e.shortExcessInQty || 0) !== 0 ||
   ((e.receivedQtyInPallets || 0) > 0 && e.receivedQtyInPallets !== e.invoiceQtyInPallet) ||
   ((e.receivedQtyInNos     || 0) > 0 && e.receivedQtyInNos     !== e.invoiceQtyInNos) ||
   ((e.receivedNetWeight    || 0) > 0 && Math.abs((e.receivedNetWeight || 0) - (e.invoiceNetWeight || 0)) > 0.01);
@@ -967,6 +977,11 @@ export default function InwardClient() {
   const [smartError, setSmartError] = useState<string | null>(null);
   const [smartImported, setSmartImported] = useState(0);
   const [dupeError, setDupeError] = useState<string | null>(null);
+  const [stagingPrompt, setStagingPrompt] = useState<{ count: number; resolve: (yes: boolean) => void } | null>(null);
+
+  // ── Staging area ask helper — shows modal, returns promise ──────────────
+  const askStaging = (count: number): Promise<boolean> =>
+    new Promise(resolve => setStagingPrompt({ count, resolve }));
 
   // ── Duplicate HU detection — computed from current entries, updates automatically
   const duplicateHUs = useMemo(() => {
@@ -1020,7 +1035,7 @@ export default function InwardClient() {
         invoiceQtyInPallet: 0, invoiceQtyInNos: 0, invoiceNetWeight: 0,
         receivedQtyInPallets: 0, receivedQtyInNos: 0, receivedQtyInKgs: 0,
         receivedNetWeight: 0, numberOfBoxes: 0, boxPerKg: 0,
-        shortInPallet: 0, shortExcessInKg: 0, remarks: "", discrepancyRemarks: "",
+        shortInPallet: 0, shortExcessInKg: 0, shortExcessInQty: 0, remarks: "", discrepancyRemarks: "",
         actualHuUnit: "", actualDescription: "",
       });
       setFormOpen(true);
@@ -1070,7 +1085,14 @@ export default function InwardClient() {
     try {
       // Send file to backend for Excel parsing (avoids timezone/date issues in frontend JS)
       const arrayBuf = await file.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+      // Chunk-based btoa — avoids "Maximum call stack size exceeded" on large files
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = '';
+      const CHUNK = 8192;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      const base64 = btoa(binary);
       const parseRes = await fetch('http://localhost:5001/api/inward/parse-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1157,6 +1179,7 @@ export default function InwardClient() {
           lrNumber:             toStr(col("LR No")),
           shortInPallet,
           shortExcessInKg,
+          shortExcessInQty: rcvNos - invNos,
           truckInTime:          toTime(col("Truck In time")),
           unloadStartTime:      toTime(col("Unload Start Time")),
           unloadEndTime:        toTime(col("End Time")),
@@ -1213,13 +1236,22 @@ export default function InwardClient() {
       return;
     }
 
+    // ── Staging area check ─────────────────────────────────────────────────
+    const noBin = toCommit.filter(e => !e.binLocation?.trim() && !e.stockLocation?.trim());
+    let markAsStaging = false;
+    if (noBin.length > 0) {
+      markAsStaging = await askStaging(noBin.length);
+      setStagingPrompt(null);
+    }
+
     setIsSaving(true); setSaveError(null);
     try {
       const payload: ManualEntryPayload[] = toCommit.map((e) => ({
         date: e.date, gateSerialNo: e.gateSerialNo, source: e.source,
         invoiceNumber: e.invoiceNumber, sapDocumentNumber: e.sapDocumentNumber,
         lrNumber: e.lrNumber, sealNumber: e.sealNumber, truckNumber: e.truckNumber,
-        transporter: e.transporter, category: e.category, stockLocation: e.stockLocation,
+        transporter: e.transporter, category: e.category,
+        stockLocation: markAsStaging && !e.binLocation?.trim() && !e.stockLocation?.trim() ? "STAGING AREA" : e.stockLocation,
         truckInTime: e.truckInTime, unloadStartTime: e.unloadStartTime,
         unloadEndTime: e.unloadEndTime, truckOutTime: e.truckOutTime,
         tat: e.tat, tatRemarks: e.tatRemarks,
@@ -1232,7 +1264,7 @@ export default function InwardClient() {
         receivedQtyInNos: e.receivedQtyInNos, receivedQtyInKgs: e.receivedQtyInKgs,
         receivedNetWeight: e.receivedNetWeight, netWeight: e.netWeight,
         receivedPalletCount: e.receivedPalletCount, numberOfBoxes: e.numberOfBoxes,
-        boxPerKg: e.boxPerKg, shortInPallet: e.shortInPallet, shortExcessInKg: e.shortExcessInKg,
+        boxPerKg: e.boxPerKg, shortInPallet: e.shortInPallet, shortExcessInKg: e.shortExcessInKg, shortExcessInQty: e.shortExcessInQty,
         remarks: e.remarks + (e.discrepancyRemarks ? ` | DISCREPANCY: ${e.discrepancyRemarks}` : ""),
         discrepancyRemarks: e.discrepancyRemarks,
         status: e.entryStatus === "DISCREPANCY" ? "DISCREPANCY" : "APPROVED",
@@ -1392,6 +1424,42 @@ export default function InwardClient() {
         )}
       </div>
 
+      {/* ── Staging Area Prompt Modal ── */}
+      {stagingPrompt && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+          <div style={{ background: "#fff", borderRadius: "16px", width: "100%", maxWidth: "420px", boxShadow: "0 24px 60px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+            <div style={{ background: "#fffbeb", borderBottom: "1px solid #fde68a", padding: "18px 24px 14px" }}>
+              <div style={{ fontSize: "14px", fontWeight: 900, color: "#92400e", display: "flex", alignItems: "center", gap: "8px" }}>
+                <MapPin size={16} /> No Bin Location Detected
+              </div>
+              <div style={{ fontSize: "11px", color: "#78350f", marginTop: "4px" }}>
+                {stagingPrompt.count} item{stagingPrompt.count !== 1 ? "s" : ""} have no bin or stock location assigned.
+              </div>
+            </div>
+            <div style={{ padding: "20px 24px" }}>
+              <p style={{ fontSize: "13px", color: "#374151", lineHeight: "1.6", margin: 0 }}>
+                Are these items currently in the <strong>Staging Area</strong>?
+              </p>
+              <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "6px", marginBottom: 0 }}>
+                Selecting <strong>Yes</strong> will tag them as <code style={{ background: "#f1f5f9", borderRadius: "4px", padding: "1px 5px" }}>STAGING AREA</code> in stock location. You can reassign them later from Inventory.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", padding: "12px 24px 20px", borderTop: "1px solid #f1f5f9" }}>
+              <button
+                onClick={() => { stagingPrompt.resolve(false); setStagingPrompt(null); }}
+                style={{ padding: "9px 20px", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: "9px", fontSize: "12px", fontWeight: 700, color: "#64748b", cursor: "pointer" }}>
+                No, skip for now
+              </button>
+              <button
+                onClick={() => stagingPrompt.resolve(true)}
+                style={{ padding: "9px 22px", background: "#d97706", border: "none", borderRadius: "9px", fontSize: "12px", fontWeight: 800, color: "#fff", cursor: "pointer" }}>
+                Yes, mark as Staging Area
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Entries List */}
       <div className="flex-1 overflow-y-auto">
         {entries.length === 0 ? (
@@ -1423,23 +1491,42 @@ export default function InwardClient() {
             <div className="grid items-center gap-3 px-4 py-2 mb-1"
               style={{ gridTemplateColumns: "1.5rem 1.5fr 1.8fr 0.7fr 0.7fr 0.9fr auto" }}>
               {["#", "Material", "Invoice vs Received", "Δ Qty", "Δ Wt", "Status", "Actions"].map((h) => (
-                <div key={h} className="text-xs font-bold uppercase tracking-widest text-gray-400">{h}</div>
+                <div key={h} className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</div>
               ))}
             </div>
+
+            {/* Entry rows */}
             {entries.map((entry, idx) => (
               <EntryRow
-                key={entry.id} entry={entry} index={idx}
-                isDupeHU={isSpecificHU(entry.huUnit) && duplicateHuUnits.has(entry.huUnit)}
-                onEdit={() => setEditingEntry(entry)}
+                key={entry.id}
+                entry={entry}
+                index={idx}
+                onEdit={() => { setEditingEntry(entry); setFormOpen(true); }}
                 onDelete={() => setEntries(prev => prev.filter(e => e.id !== entry.id))}
                 onStatusChange={(s) => handleStatusChange(entry.id, s)}
                 onUpdateField={(f, v) => handleUpdateField(entry.id, f, v)}
+                isDupeHU={isSpecificHU(entry.huUnit) && duplicateHUs.has(entry.huUnit)}
                 isViewer={isViewer}
               />
             ))}
           </>
         )}
       </div>
+
+      {/* ── Entry Form Modal */}
+      {formOpen && (
+        <EntryFormModal
+          entry={editingEntry ?? {
+            ...EMPTY_ENTRY,
+            id: "",
+            entryStatus: "PENDING",
+          }}
+          isEdit={!!editingEntry}
+          onSave={handleAddEntry}
+          onSaveAndNext={editingEntry ? undefined : handleSaveAndNext}
+          onClose={() => { setFormOpen(false); setEditingEntry(null); }}
+        />
+      )}
     </div>
   );
 }

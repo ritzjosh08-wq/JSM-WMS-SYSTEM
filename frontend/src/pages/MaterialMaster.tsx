@@ -2,52 +2,196 @@ import React, { useState, useEffect } from 'react';
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  LineChart, Line, ComposedChart,
 } from 'recharts';
-import { Box, RefreshCw, TrendingUp, Package, Weight, Layers } from 'lucide-react';
+import { Box, RefreshCw, TrendingUp, Weight, Layers } from 'lucide-react';
 
 const API = 'http://localhost:5001/api';
 
-const COLORS_RM = ['#2563eb','#3b82f6','#60a5fa','#93c5fd','#1d4ed8','#1e40af','#0284c7','#0369a1'];
-const COLORS_FG = ['#7c3aed','#8b5cf6','#a78bfa','#c4b5fd','#6d28d9','#5b21b6','#9333ea','#a855f7'];
+const COLORS_RM = [
+  '#2563eb','#7c3aed','#059669','#d97706','#dc2626',
+  '#0891b2','#db2777','#65a30d','#1d4ed8','#6d28d9',
+];
 
+// ── helpers ────────────────────────────────────────────────────────────────
+function getDateFromEntry(entry: any): Date | null {
+  const raw = entry.createdAt || parseCFRaw(entry.customFields)?.date || '';
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+function parseCFRaw(s: any): any {
+  try { return JSON.parse(s || '{}'); } catch { return {}; }
+}
+function periodKey(d: Date, view: 'day' | 'week' | 'month'): string {
+  if (view === 'day') return d.toISOString().slice(0, 10);
+  if (view === 'month') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  const tmp = new Date(d); tmp.setHours(0,0,0,0);
+  tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay()+6) % 7));
+  const jan4 = new Date(tmp.getFullYear(), 0, 4);
+  const wk = 1 + Math.round(((tmp.getTime()-jan4.getTime())/86400000 - 3 + ((jan4.getDay()+6)%7)) / 7);
+  return `${tmp.getFullYear()}-W${String(wk).padStart(2,'0')}`;
+}
+function periodLabel(key: string, view: 'day' | 'week' | 'month'): string {
+  if (view === 'day') {
+    const d = new Date(key);
+    return `${d.getDate()} ${d.toLocaleString('default',{month:'short'})}`;
+  }
+  if (view === 'month') {
+    const [y, m] = key.split('-');
+    const d = new Date(Number(y), Number(m)-1, 1);
+    return d.toLocaleString('default',{month:'short',year:'2-digit'});
+  }
+  return key;
+}
+function recentPeriods(view: 'day' | 'week' | 'month'): string[] {
+  const now = new Date(); const keys: string[] = [];
+  const n = view === 'day' ? 14 : view === 'week' ? 10 : 6;
+  for (let i = n-1; i >= 0; i--) {
+    const d = new Date(now);
+    if (view === 'day')   d.setDate(d.getDate() - i);
+    if (view === 'week')  d.setDate(d.getDate() - i*7);
+    if (view === 'month') d.setMonth(d.getMonth() - i);
+    keys.push(periodKey(d, view));
+  }
+  return [...new Set(keys)];
+}
 function parseCF(s: string | null | undefined): any {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
 
+// Aggregate batches by material type → { name, pallets, nos }
+function buildTypeData(batches: any[]): { name: string; pallets: number; nos: number }[] {
+  const map: Record<string, { pallets: number; nos: number }> = {};
+  batches.forEach((b: any) => {
+    if ((b.quantity ?? 0) <= 0) return;
+    const cf  = parseCF(b.customFields);
+    const t   = (cf.materialType || 'Other').trim() || 'Other';
+    if (!map[t]) map[t] = { pallets: 0, nos: 0 };
+    map[t].pallets += Number(cf.pallets  || 0);
+    map[t].nos     += Number(b.quantity  || 0);
+  });
+  return Object.entries(map)
+    .map(([name, v]) => ({ name, ...v }))
+    .filter(t => t.pallets > 0 || t.nos > 0)
+    .sort((a, b) => b.pallets - a.pallets);
+}
+
 const CARD: React.CSSProperties = {
   background: '#fff', border: '1px solid #e2e8f0', borderRadius: '14px',
-  padding: '20px 24px', boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
-};
-const TH: React.CSSProperties = {
-  padding: '9px 12px', textAlign: 'left', fontSize: '10px', fontWeight: 700,
-  color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em',
-  borderBottom: '1px solid #e2e8f0', background: '#f8fafc', whiteSpace: 'nowrap',
-};
-const TD: React.CSSProperties = {
-  padding: '8px 12px', fontSize: '12px', color: '#374151',
-  borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap',
+  padding: '18px 20px', boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
 };
 
-// Custom tooltip for pie
-const PieTooltip = ({ active, payload }: any) => {
-  if (!active || !payload?.length) return null;
-  const d = payload[0].payload;
+// ── Warehouse chart (ComposedChart: bars=pallets left y, line=qty right y) ──
+function WHChart({
+  data, title, subtitle, barColor,
+}: {
+  data: { name: string; pallets: number; nos: number }[];
+  title: string; subtitle: string; barColor: string;
+}) {
+  const totalPallets = data.reduce((s, d) => s + d.pallets, 0);
+  const totalNos     = data.reduce((s, d) => s + d.nos, 0);
   return (
-    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', fontSize: '12px' }}>
-      <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: '4px' }}>{d.name}</div>
-      <div style={{ color: '#64748b' }}>Pallets: <b style={{ color: '#2563eb' }}>{d.pallets || 0}</b></div>
-      <div style={{ color: '#64748b' }}>Qty (Nos): <b style={{ color: '#059669' }}>{Number(d.nos || 0).toFixed(0)}</b></div>
-      <div style={{ color: '#64748b' }}>Net Wt: <b style={{ color: '#7c3aed' }}>{Number(d.kg || 0).toFixed(1)} kg</b></div>
+    <div style={CARD}>
+      {/* card header */}
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'10px', gap:'10px' }}>
+        <div>
+          <div style={{ fontSize:'13px', fontWeight:800, color:'#0f172a', lineHeight:1.3 }}>{title}</div>
+          <div style={{ fontSize:'11px', color:'#94a3b8', marginTop:'2px' }}>{subtitle}</div>
+        </div>
+        <div style={{ display:'flex', gap:'8px', flexShrink:0 }}>
+          <div style={{ background: barColor+'15', border:'1px solid '+barColor+'40', borderRadius:'8px', padding:'4px 10px', textAlign:'center' }}>
+            <div style={{ fontSize:'15px', fontWeight:900, color:barColor, lineHeight:1 }}>{totalPallets.toFixed(0)}</div>
+            <div style={{ fontSize:'9px', color:'#94a3b8', fontWeight:600 }}>pallets</div>
+          </div>
+          <div style={{ background:'#ecfdf5', border:'1px solid #a7f3d0', borderRadius:'8px', padding:'4px 10px', textAlign:'center' }}>
+            <div style={{ fontSize:'15px', fontWeight:900, color:'#059669', lineHeight:1 }}>{totalNos.toFixed(0)}</div>
+            <div style={{ fontSize:'9px', color:'#94a3b8', fontWeight:600 }}>nos</div>
+          </div>
+        </div>
+      </div>
+
+      {data.length === 0 ? (
+        <div style={{ textAlign:'center', padding:'32px 0', color:'#94a3b8', fontSize:'12px' }}>No data for this storage type</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={230}>
+          <ComposedChart data={data} margin={{ top:4, right:44, bottom:60, left:0 }} barCategoryGap="35%">
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis
+              dataKey="name"
+              tick={{ fontSize:10, fill:'#64748b' }}
+              angle={-35}
+              textAnchor="end"
+              interval={0}
+              height={64}
+              tickLine={false}
+              axisLine={{ stroke:'#e2e8f0' }}
+            />
+            <YAxis
+              yAxisId="left"
+              orientation="left"
+              tick={{ fontSize:9, fill: barColor }}
+              tickLine={false}
+              axisLine={false}
+              width={32}
+              tickFormatter={(v) => v === 0 ? '' : v.toFixed(0)}
+            />
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              tick={{ fontSize:9, fill:'#059669' }}
+              tickLine={false}
+              axisLine={false}
+              width={32}
+              tickFormatter={(v) => v === 0 ? '' : v.toFixed(0)}
+            />
+            <Tooltip
+              contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px', boxShadow:'0 4px 16px rgba(0,0,0,0.08)' }}
+              labelStyle={{ fontWeight:700, color:'#0f172a', marginBottom:'4px', fontSize:'12px' }}
+              formatter={(v: any, name: string) => [Number(v).toFixed(0), name === 'pallets' ? 'Pallets' : 'Qty (Nos)']}
+            />
+            <Legend
+              iconType="circle"
+              iconSize={8}
+              wrapperStyle={{ fontSize:'10px', paddingTop:'6px' }}
+              formatter={(v) => v === 'pallets' ? 'Pallets' : 'Qty (Nos)'}
+            />
+            <Bar
+              yAxisId="left"
+              dataKey="pallets"
+              name="pallets"
+              fill={barColor}
+              radius={[4,4,0,0]}
+            />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="nos"
+              name="nos"
+              stroke="#059669"
+              strokeWidth={2}
+              dot={{ r:4, fill:'#059669', stroke:'#fff', strokeWidth:2 }}
+              activeDot={{ r:5 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
+}
+
+// Custom line dot (only shows when value > 0)
+const ActiveDot = (props: any) => {
+  const { cx, cy, value, stroke } = props;
+  if (!value) return null;
+  return <circle cx={cx} cy={cy} r={4} fill={stroke} stroke="#fff" strokeWidth={2} />;
 };
 
 export default function MaterialMaster() {
-  const [inventory, setInventory]     = useState<any[]>([]);
-  const [inwardData, setInwardData]   = useState<any[]>([]);
-  const [outwardData, setOutwardData] = useState<any[]>([]);
-  const [loading, setLoading]         = useState(false);
-  const [activeView, setActiveView]   = useState<'pallets' | 'kgs'>('pallets');
+  const [inventory, setInventory]       = useState<any[]>([]);
+  const [inwardData, setInwardData]     = useState<any[]>([]);
+  const [outwardData, setOutwardData]   = useState<any[]>([]);
+  const [loading, setLoading]           = useState(false);
+  const [activityView, setActivityView] = useState<'day' | 'week' | 'month'>('day');
 
   const load = async () => {
     setLoading(true);
@@ -66,202 +210,339 @@ export default function MaterialMaster() {
 
   useEffect(() => { load(); }, []);
 
-  // ── Build material summary from inventory ──────────────────────────────────
-  const materialMap: Record<string, { name: string; pallets: number; kg: number; nos: number; category: string; materialType: string }> = {};
-  inventory.forEach((batch: any) => {
-    const cf = parseCF(batch.customFields);
-    const code = batch.material?.code || '?';
-    const cat  = (cf.category || batch.material?.category || 'RM').toUpperCase();
-    const type = cf.materialType || batch.material?.materialType || '';
-    if (!materialMap[code]) materialMap[code] = { name: `${code}`, pallets: 0, kg: 0, nos: 0, category: cat, materialType: type };
-    materialMap[code].pallets += Number(cf.pallets || 0);
-    materialMap[code].kg      += Number(cf.netWeight || 0);
-    materialMap[code].nos     += Number(batch.quantity || 0);
-  });
-  const allMaterials = Object.values(materialMap);
-  const rmMaterials  = allMaterials.filter(m => m.category.includes('RM'));
-  const fgMaterials  = allMaterials.filter(m => m.category.includes('FG'));
-
-  // RM grouped by material type (for pie + bar chart — inventory data only)
+  // ── RM type aggregation (for pie + bar) ──────────────────────────────────
   const rmTypeMap: Record<string, { name: string; pallets: number; kg: number; nos: number }> = {};
-  rmMaterials.forEach(m => {
-    const key = m.materialType || 'Unclassified';
-    if (!rmTypeMap[key]) rmTypeMap[key] = { name: key, pallets: 0, kg: 0, nos: 0 };
-    rmTypeMap[key].pallets += m.pallets;
-    rmTypeMap[key].kg      += m.kg;
-    rmTypeMap[key].nos     += m.nos;
+  inventory.forEach((b: any) => {
+    const cf  = parseCF(b.customFields);
+    const cat = (cf.category || b.material?.category || 'RM').toUpperCase();
+    if (!cat.includes('RM')) return;
+    if ((b.quantity ?? 0) <= 0) return;
+    const type = (cf.materialType || 'Unclassified').trim() || 'Unclassified';
+    if (!rmTypeMap[type]) rmTypeMap[type] = { name: type, pallets: 0, kg: 0, nos: 0 };
+    rmTypeMap[type].pallets += Number(cf.pallets   || 0);
+    rmTypeMap[type].kg      += Number(cf.netWeight || 0);
+    rmTypeMap[type].nos     += Number(b.quantity   || 0);
   });
-  const rmTypeData = Object.values(rmTypeMap).filter(t => t.pallets > 0 || t.kg > 0);
+  const rmTypeData = Object.values(rmTypeMap)
+    .filter(t => t.pallets > 0 || t.kg > 0 || t.nos > 0)
+    .sort((a, b) => b.pallets - a.pallets);
+  const rmPallets = rmTypeData.reduce((s, t) => s + t.pallets, 0);
 
-  // ── Movement frequency from inward + outward ───────────────────────────────
-  const movementMap: Record<string, { code: string; inQty: number; outQty: number; inCount: number; outCount: number }> = {};
+  // ── Summary stats ─────────────────────────────────────────────────────────
+  let totalPallets = 0; let totalKg = 0;
+  const materialCodes = new Set<string>();
+  inventory.forEach((b: any) => {
+    const cf = parseCF(b.customFields);
+    totalPallets += Number(cf.pallets   || 0);
+    totalKg      += Number(cf.netWeight || 0);
+    if (b.material?.code) materialCodes.add(b.material.code);
+  });
+
+  // ── Activity line chart — count of entries per period ────────────────────
+  const periods = recentPeriods(activityView);
+  const inCounts:  Record<string, number> = {};
+  const outCounts: Record<string, number> = {};
+  periods.forEach(k => { inCounts[k] = 0; outCounts[k] = 0; });
   inwardData.forEach((entry: any) => {
-    (entry.lineItems || []).forEach((item: any) => {
-      const code = item.materialCode;
-      if (!movementMap[code]) movementMap[code] = { code, inQty: 0, outQty: 0, inCount: 0, outCount: 0 };
-      movementMap[code].inQty   += Number(item.quantity || 0);
-      movementMap[code].inCount += 1;
-    });
+    const d = getDateFromEntry(entry);
+    if (!d) return;
+    const k = periodKey(d, activityView);
+    if (k in inCounts) inCounts[k]++;
   });
   outwardData.forEach((entry: any) => {
-    (entry.lineItems || []).forEach((item: any) => {
-      const code = item.materialCode;
-      if (!movementMap[code]) movementMap[code] = { code, inQty: 0, outQty: 0, inCount: 0, outCount: 0 };
-      movementMap[code].outQty   += Number(item.pickedQty || 0);
-      movementMap[code].outCount += 1;
-    });
+    const d = getDateFromEntry(entry);
+    if (!d) return;
+    const k = periodKey(d, activityView);
+    if (k in outCounts) outCounts[k]++;
   });
-  const movementData = Object.values(movementMap)
-    .sort((a, b) => (b.inCount + b.outCount) - (a.inCount + a.outCount))
-    .slice(0, 15); // top 15
+  const lineChartData = periods.map(k => ({
+    label:   periodLabel(k, activityView),
+    inward:  inCounts[k],
+    outward: outCounts[k],
+  }));
+  const periodInTotal  = Object.values(inCounts).reduce((s,v) => s+v, 0);
+  const periodOutTotal = Object.values(outCounts).reduce((s,v) => s+v, 0);
 
-  // summary stats
-  const totalPallets = allMaterials.reduce((s, m) => s + m.pallets, 0);
-  const totalKg      = allMaterials.reduce((s, m) => s + m.kg, 0);
-  const totalNos     = allMaterials.reduce((s, m) => s + m.nos, 0);
-  const rmPallets    = rmMaterials.reduce((s, m) => s + m.pallets, 0);
-  const fgPallets    = fgMaterials.reduce((s, m) => s + m.pallets, 0);
+  // ── Warehouse data — CM35 (floor + rack) and FG05 ────────────────────────
+  const cm35All    = inventory.filter((b: any) => b.warehouse?.code === 'CM35');
+  const fg05All    = inventory.filter((b: any) => b.warehouse?.code === 'FG05');
 
-  const pieField = activeView === 'pallets' ? 'pallets' : 'kg';
+  const cm35Floor  = cm35All.filter((b: any) => b.floorLocation);
+  const cm35Rack   = cm35All.filter((b: any) => b.rack || b.bin);
+
+  const cm35FloorData = buildTypeData(cm35Floor);
+  const cm35RackData  = buildTypeData(cm35Rack);
+  const fg05Data      = buildTypeData(fg05All);
+
+  const hasCM35  = cm35FloorData.length > 0 || cm35RackData.length > 0;
+  const hasFG05  = fg05Data.length > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 900, color: '#0f172a', margin: 0 }}>Material Master</h1>
-          <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>Inventory analytics — material distribution, types and movement frequency.</p>
+          <h1 style={{ fontSize:'20px', fontWeight:900, color:'#0f172a', margin:0 }}>Material Master</h1>
+          <p style={{ fontSize:'12px', color:'#94a3b8', marginTop:'4px' }}>
+            Inventory analytics — RM composition, movement trends, and warehouse utilization.
+          </p>
         </div>
         <button onClick={load} disabled={loading}
-          style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 18px', background: '#2563eb', border: 'none', borderRadius: '9px', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+          style={{ display:'flex', alignItems:'center', gap:'7px', padding:'9px 18px', background:'#2563eb', border:'none', borderRadius:'9px', color:'#fff', fontSize:'13px', fontWeight:700, cursor:'pointer', opacity: loading ? 0.7 : 1 }}>
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} /> Refresh
         </button>
       </div>
 
-      {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '14px' }}>
+      {/* ── Summary cards ─────────────────────────────────────────────── */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'14px' }}>
         {[
-          { label: 'Total Materials', value: allMaterials.length, icon: Box, color: '#2563eb', bg: '#eff6ff' },
-          { label: 'Total Pallets',   value: totalPallets.toFixed(0), icon: Layers, color: '#059669', bg: '#ecfdf5' },
-          { label: 'Total Kgs',       value: `${(totalKg/1000).toFixed(1)} T`, icon: Weight, color: '#7c3aed', bg: '#f5f3ff' },
-          { label: 'Movement Events', value: Object.values(movementMap).reduce((s,m)=>s+m.inCount+m.outCount,0), icon: TrendingUp, color: '#d97706', bg: '#fffbeb' },
+          { label:'Total Materials', value: materialCodes.size,                  icon: Box,       color:'#2563eb', bg:'#eff6ff' },
+          { label:'Total Pallets',   value: totalPallets.toFixed(0),             icon: Layers,    color:'#059669', bg:'#ecfdf5' },
+          { label:'Total Weight',    value: (totalKg/1000).toFixed(1)+' T',      icon: Weight,    color:'#7c3aed', bg:'#f5f3ff' },
+          { label:'Movements',       value: inwardData.length + outwardData.length, icon: TrendingUp,color:'#d97706', bg:'#fffbeb' },
         ].map(c => {
           const Icon = c.icon;
           return (
-            <div key={c.label} style={{ ...CARD, display: 'flex', alignItems: 'center', gap: '14px' }}>
-              <div style={{ width: 44, height: 44, borderRadius: '12px', background: c.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Icon size={20} style={{ color: c.color }} />
+            <div key={c.label} style={{ ...CARD, display:'flex', alignItems:'center', gap:'14px' }}>
+              <div style={{ width:42, height:42, borderRadius:'12px', background:c.bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                <Icon size={18} style={{ color:c.color }} />
               </div>
               <div>
-                <div style={{ fontSize: '22px', fontWeight: 900, color: '#0f172a' }}>{c.value}</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>{c.label}</div>
+                <div style={{ fontSize:'22px', fontWeight:900, color:'#0f172a', lineHeight:1 }}>{c.value}</div>
+                <div style={{ fontSize:'11px', color:'#94a3b8', fontWeight:600, marginTop:'3px' }}>{c.label}</div>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* RM type pie + RM type bar (inventory data only) */}
-      <div style={{ display: 'grid', gridTemplateColumns: '420px 1fr', gap: '16px' }}>
-        {/* RM type pie — pallets or kg */}
+      {/* ── RM Type Pie + RM Bar ───────────────────────────────────────── */}
+      <div style={{ display:'grid', gridTemplateColumns:'380px 1fr', gap:'16px' }}>
+
+        {/* Pie — types only, colour-coded */}
         <div style={CARD}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: '#1e40af' }}>RM — by Type of Material</div>
-              <div style={{ fontSize: '11px', color: '#94a3b8' }}>{rmTypeData.length} types · {rmPallets.toFixed(0)} pallets total</div>
-            </div>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              {(['pallets','kgs'] as const).map(v => (
-                <button key={v} onClick={() => setActiveView(v === 'kgs' ? 'kgs' : 'pallets')}
-                  style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1.5px solid', borderColor: activeView===v?'#2563eb':'#e2e8f0', background: activeView===v?'#eff6ff':'#fff', color: activeView===v?'#2563eb':'#64748b' }}>
-                  {v}
-                </button>
-              ))}
-            </div>
+          <div style={{ fontSize:'14px', fontWeight:800, color:'#1e40af', marginBottom:'2px' }}>RM — Material Types</div>
+          <div style={{ fontSize:'11px', color:'#94a3b8', marginBottom:'12px' }}>
+            {rmTypeData.length} type{rmTypeData.length !== 1 ? 's' : ''} · {rmPallets.toFixed(0)} pallets total
           </div>
           {rmTypeData.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8', fontSize: '12px' }}>No RM inventory data</div>
+            <div style={{ textAlign:'center', padding:'48px 0', color:'#94a3b8', fontSize:'12px' }}>No RM inventory data</div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <PieChart>
-                <Pie data={rmTypeData} dataKey={pieField === 'nos' ? 'nos' : pieField} nameKey="name" cx="50%" cy="50%" outerRadius={110} innerRadius={48} paddingAngle={2}
-                  label={({ name, percent }) => percent > 0.05 ? name : ''} labelLine={false}>
-                  {rmTypeData.map((_, i) => <Cell key={i} fill={COLORS_RM[i % COLORS_RM.length]} />)}
-                </Pie>
-                <Tooltip content={<PieTooltip />} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
-              </PieChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={240}>
+                <PieChart margin={{ top:0, right:0, bottom:0, left:0 }}>
+                  <Pie
+                    data={rmTypeData}
+                    dataKey="pallets"
+                    nameKey="name"
+                    cx="50%" cy="50%"
+                    outerRadius={100}
+                    innerRadius={44}
+                    paddingAngle={3}
+                    label={false}
+                    labelLine={false}
+                  >
+                    {rmTypeData.map((_, i) => (
+                      <Cell key={i} fill={COLORS_RM[i % COLORS_RM.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
+                    formatter={(_v: any, name: string) => [name, 'Type']}
+                  />
+                  <Legend
+                    iconType="circle"
+                    iconSize={9}
+                    wrapperStyle={{ fontSize:'11px', lineHeight:'20px' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </>
           )}
         </div>
 
-        {/* RM type bar — pallets + net weight from inventory */}
+        {/* RM bar — pallets & net weight by type */}
         <div style={CARD}>
-          <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a', marginBottom: '4px' }}>RM Inventory — Pallets &amp; Net Weight by Type</div>
-          <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '12px' }}>Current stock from inventory, grouped by material type</div>
+          <div style={{ fontSize:'14px', fontWeight:800, color:'#0f172a', marginBottom:'2px' }}>RM — Pallets &amp; Net Weight by Type</div>
+          <div style={{ fontSize:'11px', color:'#94a3b8', marginBottom:'12px' }}>Current RM stock grouped by material type</div>
           {rmTypeData.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8', fontSize: '12px' }}>No RM inventory data</div>
+            <div style={{ textAlign:'center', padding:'48px 0', color:'#94a3b8', fontSize:'12px' }}>No RM inventory data</div>
           ) : (
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={rmTypeData} margin={{ top: 4, right: 12, bottom: 44, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} angle={-30} textAnchor="end" interval={0} />
-                <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: '#2563eb' }} orientation="left" />
-                <YAxis yAxisId="right" tick={{ fontSize: 10, fill: '#059669' }} orientation="right" />
-                <Tooltip labelStyle={{ fontWeight: 700, fontSize: '12px' }} contentStyle={{ borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '12px' }}
-                  formatter={(v: any, name: string) => [Number(v).toFixed(1), name === 'pallets' ? 'Pallets' : 'Net Wt (kg)']} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
+              <BarChart data={rmTypeData} margin={{ top:4, right:44, bottom:60, left:0 }} barCategoryGap="35%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize:10, fill:'#64748b' }}
+                  angle={-35}
+                  textAnchor="end"
+                  interval={0}
+                  height={64}
+                  tickLine={false}
+                  axisLine={{ stroke:'#e2e8f0' }}
+                />
+                <YAxis yAxisId="left"  orientation="left"  tick={{ fontSize:9, fill:'#2563eb' }} tickLine={false} axisLine={false} width={32} tickFormatter={(v) => v===0?'':v.toFixed(0)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize:9, fill:'#059669' }} tickLine={false} axisLine={false} width={36} tickFormatter={(v) => v===0?'':v.toFixed(0)} />
+                <Tooltip
+                  contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
+                  labelStyle={{ fontWeight:700, color:'#0f172a', marginBottom:'4px' }}
+                  formatter={(v: any, name: string) => [Number(v).toFixed(1), name === 'pallets' ? 'Pallets' : 'Net Wt (kg)']}
+                />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:'10px', paddingTop:'6px' }}
                   formatter={(v) => v === 'pallets' ? 'Pallets' : 'Net Wt (kg)'} />
-                <Bar yAxisId="left"  dataKey="pallets" fill="#2563eb" radius={[4,4,0,0]} name="pallets" />
-                <Bar yAxisId="right" dataKey="kg"      fill="#059669" radius={[4,4,0,0]} name="kg" />
+                <Bar yAxisId="left"  dataKey="pallets" name="pallets" fill="#2563eb" radius={[4,4,0,0]} />
+                <Bar yAxisId="right" dataKey="kg"      name="kg"      fill="#059669" radius={[4,4,0,0]} opacity={0.85} />
               </BarChart>
             </ResponsiveContainer>
           )}
         </div>
       </div>
 
-      {/* Material table */}
+      {/* ── Inward & Outbound Activity — Line Chart ────────────────────── */}
       <div style={CARD}>
-        <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a', marginBottom: '14px' }}>
-          All Materials — Current Stock
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px', flexWrap:'wrap', gap:'10px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+            <span style={{ width:'4px', height:'18px', background:'#059669', borderRadius:'3px', display:'inline-block' }} />
+            <div>
+              <div style={{ fontSize:'14px', fontWeight:800, color:'#0f172a' }}>Inward &amp; Outbound Activity</div>
+              <div style={{ fontSize:'11px', color:'#94a3b8' }}>
+                No. of entries per {activityView === 'day' ? 'day (last 14)' : activityView === 'week' ? 'week (last 10)' : 'month (last 6)'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:'5px' }}>
+            {(['day','week','month'] as const).map(v => (
+              <button key={v} onClick={() => setActivityView(v)}
+                style={{ padding:'4px 12px', borderRadius:'20px', fontSize:'11px', fontWeight:700, cursor:'pointer', border:'1.5px solid', borderColor:activityView===v?'#059669':'#e2e8f0', background:activityView===v?'#ecfdf5':'#fff', color:activityView===v?'#059669':'#64748b', textTransform:'capitalize' }}>
+                {v}
+              </button>
+            ))}
+          </div>
         </div>
-        <div style={{ overflowX: 'auto', maxHeight: '360px', overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>{['Material Code','Description','Category','Type','Pallets','Qty (Nos)','Net Wt (kg)','Inward Txns','Outward Txns','Net Movement'].map(h =>
-                <th key={h} style={TH}>{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>{allMaterials.length === 0 ? (
-              <tr><td colSpan={10} style={{ ...TD, textAlign: 'center', color: '#94a3b8', padding: '32px' }}>No inventory data. Load an inward entry to populate.</td></tr>
-            ) : allMaterials.map((m, i) => {
-              const mv = movementMap[m.name] || { inCount: 0, outCount: 0, inQty: 0, outQty: 0 };
-              const isFG = m.category.includes('FG');
-              return (
-                <tr key={m.name} style={{ background: i%2===0?'#fff':'#f8fafc' }}>
-                  <td style={{ ...TD, fontFamily: 'monospace', fontWeight: 700, color: '#1e40af' }}>{m.name}</td>
-                  <td style={{ ...TD, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{inventory.find((b:any) => b.material?.code === m.name)?.material?.description || '—'}</td>
-                  <td style={TD}>
-                    <span style={{ background: isFG?'#f5f3ff':'#ecfdf5', color: isFG?'#7c3aed':'#059669', border: `1px solid ${isFG?'#ddd6fe':'#a7f3d0'}`, borderRadius: '20px', padding: '1px 8px', fontSize: '10px', fontWeight: 700 }}>{m.category}</span>
-                  </td>
-                  <td style={{ ...TD, color: '#0891b2', fontWeight: 600 }}>{m.materialType || '—'}</td>
-                  <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{m.pallets.toFixed(0)}</td>
-                  <td style={{ ...TD, textAlign: 'right' }}>{m.nos.toFixed(0)}</td>
-                  <td style={{ ...TD, textAlign: 'right' }}>{m.kg.toFixed(1)}</td>
-                  <td style={{ ...TD, textAlign: 'right', color: '#2563eb', fontWeight: 700 }}>{mv.inCount}</td>
-                  <td style={{ ...TD, textAlign: 'right', color: '#059669', fontWeight: 700 }}>{mv.outCount}</td>
-                  <td style={{ ...TD, textAlign: 'right', fontWeight: 900, color: mv.inCount >= mv.outCount ? '#059669' : '#dc2626' }}>
-                    {mv.inCount >= mv.outCount ? `+${mv.inCount - mv.outCount}` : mv.inCount - mv.outCount}
-                  </td>
-                </tr>
-              );
-            })}</tbody>
-          </table>
+
+        {/* badges */}
+        <div style={{ display:'flex', gap:'10px', marginBottom:'14px', flexWrap:'wrap' }}>
+          {[
+            { label:'Total Inward',  value: inwardData.length,  color:'#2563eb', bg:'#eff6ff', border:'#bfdbfe' },
+            { label:'Total Outward', value: outwardData.length, color:'#059669', bg:'#ecfdf5', border:'#a7f3d0' },
+            { label:`Inward (period)`,  value: periodInTotal,  color:'#2563eb', bg:'#f8fafc', border:'#e2e8f0' },
+            { label:`Outward (period)`, value: periodOutTotal, color:'#059669', bg:'#f8fafc', border:'#e2e8f0' },
+          ].map(b => (
+            <div key={b.label} style={{ background:b.bg, border:'1px solid '+b.border, borderRadius:'10px', padding:'7px 14px' }}>
+              <div style={{ fontSize:'18px', fontWeight:900, color:b.color, lineHeight:1 }}>{b.value}</div>
+              <div style={{ fontSize:'10px', color:'#64748b', fontWeight:600, marginTop:'2px' }}>{b.label}</div>
+            </div>
+          ))}
         </div>
+
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={lineChartData} margin={{ top:4, right:16, bottom: activityView==='week' ? 30 : 10, left:0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fontSize:10, fill:'#64748b' }}
+              angle={activityView==='week' ? -25 : 0}
+              textAnchor={activityView==='week' ? 'end' : 'middle'}
+              interval={0}
+              height={activityView==='week' ? 40 : 20}
+              tickLine={false}
+              axisLine={{ stroke:'#e2e8f0' }}
+            />
+            <YAxis
+              tick={{ fontSize:9, fill:'#64748b' }}
+              allowDecimals={false}
+              tickLine={false}
+              axisLine={false}
+              width={24}
+              tickFormatter={(v) => v===0?'':String(v)}
+            />
+            <Tooltip
+              contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
+              labelStyle={{ fontWeight:700, color:'#0f172a', marginBottom:'4px' }}
+              formatter={(v: any, name: string) => [v, name === 'inward' ? '↓ Inward entries' : '↑ Outbound entries']}
+            />
+            <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:'10px', paddingTop:'6px' }}
+              formatter={(name: string) => name === 'inward' ? '↓ Inward' : '↑ Outbound'} />
+            <Line
+              type="monotone" dataKey="inward" name="inward" stroke="#2563eb" strokeWidth={2.5}
+              dot={<ActiveDot stroke="#2563eb" />} activeDot={{ r:6, stroke:'#fff', strokeWidth:2 }}
+            />
+            <Line
+              type="monotone" dataKey="outward" name="outward" stroke="#059669" strokeWidth={2.5}
+              strokeDasharray="5 3"
+              dot={<ActiveDot stroke="#059669" />} activeDot={{ r:6, stroke:'#fff', strokeWidth:2 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
 
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      {/* ── Warehouse Utilization ─────────────────────────────────────── */}
+      <div>
+        <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'14px' }}>
+          <span style={{ width:'4px', height:'20px', background:'#7c3aed', borderRadius:'3px', display:'inline-block' }} />
+          <span style={{ fontSize:'15px', fontWeight:800, color:'#0f172a' }}>Warehouse Utilization</span>
+          <span style={{ fontSize:'11px', color:'#94a3b8', fontWeight:600 }}>Pallets (bars, left axis) · Qty in Nos (line, right axis) · by material type</span>
+        </div>
+
+        {!hasCM35 && !hasFG05 ? (
+          <div style={{ ...CARD, textAlign:'center', padding:'48px', color:'#94a3b8', fontSize:'12px' }}>
+            No warehouse location data yet. Assign batches to floor locations or rack bins in the Warehouse Map.
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+
+            {/* CM35 section */}
+            {hasCM35 && (
+              <div>
+                <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px' }}>
+                  <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px', padding:'3px 12px' }}>
+                    <span style={{ fontSize:'12px', fontWeight:800, color:'#2563eb' }}>CM35</span>
+                  </div>
+                  <span style={{ fontSize:'12px', color:'#64748b', fontWeight:600 }}>— Floor &amp; Rack Storage</span>
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px' }}>
+                  <WHChart
+                    data={cm35FloorData}
+                    title="CM35 — Floor Storage"
+                    subtitle={`${cm35Floor.length} batch${cm35Floor.length!==1?'es':''} across floor locations`}
+                    barColor="#2563eb"
+                  />
+                  <WHChart
+                    data={cm35RackData}
+                    title="CM35 — Rack Storage"
+                    subtitle={`${cm35Rack.length} batch${cm35Rack.length!==1?'es':''} across rack / bin locations`}
+                    barColor="#7c3aed"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* FG05 section */}
+            {hasFG05 && (
+              <div>
+                <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px' }}>
+                  <div style={{ background:'#f5f3ff', border:'1px solid #ddd6fe', borderRadius:'8px', padding:'3px 12px' }}>
+                    <span style={{ fontSize:'12px', fontWeight:800, color:'#7c3aed' }}>FG05</span>
+                  </div>
+                  <span style={{ fontSize:'12px', color:'#64748b', fontWeight:600 }}>— Floor Storage</span>
+                </div>
+                <div style={{ maxWidth:'560px' }}>
+                  <WHChart
+                    data={fg05Data}
+                    title="FG05 — Floor Storage"
+                    subtitle={`${fg05All.length} batch${fg05All.length!==1?'es':''} across FG05 floor locations`}
+                    barColor="#7c3aed"
+                  />
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }`}</style>
     </div>
   );
 }
