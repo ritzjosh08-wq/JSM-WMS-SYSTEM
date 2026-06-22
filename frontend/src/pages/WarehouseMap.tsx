@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Info, Layers, Grid3X3, Warehouse } from 'lucide-react';
+import { useAuthStore } from '../store/authStore';
 
 const API = 'http://localhost:5001/api';
 
@@ -101,6 +102,7 @@ function parseDateStr(raw: string | null | undefined): string {
 }
 
 export default function WarehouseMap() {
+  const selectedWorker = useAuthStore(s => s.selectedWorker);
   const [tab, setTab] = useState<'floor' | 'rack'>('floor');
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
@@ -108,7 +110,18 @@ export default function WarehouseMap() {
   const [racks, setRacks] = useState<Rack[]>([]);
   const [inventory, setInventory] = useState<InventoryBatch[]>([]);
   const [selected, setSelected] = useState<{ type: 'floor' | 'bin'; id: string } | null>(null);
-  const [selectedWarehouse, setSelectedWarehouse] = useState<WarehouseCode>('CM35');
+  // When Admin has a worker selected, default to that worker's warehouse (only if it's a known config)
+  const workerWH = selectedWorker?.warehouseCode as WarehouseCode | undefined;
+  const defaultWH: WarehouseCode = (workerWH && workerWH in WAREHOUSE_CONFIGS) ? workerWH : 'CM35';
+  const [selectedWarehouse, setSelectedWarehouse] = useState<WarehouseCode>(defaultWH);
+
+  // Sync warehouse selector when admin switches worker
+  useEffect(() => {
+    const wc = selectedWorker?.warehouseCode as WarehouseCode | undefined;
+    if (wc && wc in WAREHOUSE_CONFIGS) {
+      setSelectedWarehouse(wc);
+    }
+  }, [selectedWorker]);
 
   // Derived lookups
   const binOccupancy = React.useMemo(() => {

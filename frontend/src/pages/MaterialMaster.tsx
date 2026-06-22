@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuthStore } from '../store/authStore';
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -187,28 +188,31 @@ const ActiveDot = (props: any) => {
 };
 
 export default function MaterialMaster() {
+  const selectedWorker = useAuthStore(s => s.selectedWorker);
   const [inventory, setInventory]       = useState<any[]>([]);
   const [inwardData, setInwardData]     = useState<any[]>([]);
   const [outwardData, setOutwardData]   = useState<any[]>([]);
   const [loading, setLoading]           = useState(false);
   const [activityView, setActivityView] = useState<'day' | 'week' | 'month'>('day');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
+      const wc = selectedWorker?.warehouseCode;
+      const wcParam = wc ? `?warehouseCode=${wc}` : '';
       const [inv, inw, out] = await Promise.all([
-        fetch(`${API}/inventory`).then(r => r.json()),
-        fetch(`${API}/inward`).then(r => r.json()),
-        fetch(`${API}/outward`).then(r => r.json()),
+        fetch(`${API}/inventory${wcParam}`).then(r => r.json()),
+        fetch(`${API}/inward${wcParam}`).then(r => r.json()),
+        fetch(`${API}/outward${wcParam}`).then(r => r.json()),
       ]);
       setInventory(Array.isArray(inv) ? inv : inv.inventory ?? []);
       setInwardData(Array.isArray(inw) ? inw : []);
       setOutwardData(Array.isArray(out) ? out : []);
     } catch {}
     setLoading(false);
-  };
+  }, [selectedWorker]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   // ── RM type aggregation (for pie + bar) ──────────────────────────────────
   const rmTypeMap: Record<string, { name: string; pallets: number; kg: number; nos: number }> = {};
@@ -283,7 +287,9 @@ export default function MaterialMaster() {
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
         <div>
-          <h1 style={{ fontSize:'20px', fontWeight:900, color:'#0f172a', margin:0 }}>Material Master</h1>
+          <h1 style={{ fontSize:'20px', fontWeight:900, color:'#0f172a', margin:0 }}>
+            {selectedWorker ? `${selectedWorker.name} — Material Master` : 'Material Master'}
+          </h1>
           <p style={{ fontSize:'12px', color:'#94a3b8', marginTop:'4px' }}>
             Inventory analytics — RM composition, movement trends, and warehouse utilization.
           </p>

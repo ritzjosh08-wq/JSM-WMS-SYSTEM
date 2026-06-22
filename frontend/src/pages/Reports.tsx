@@ -611,6 +611,7 @@ function DeleteBtn({ onDelete, canDelete = true }: { onDelete: () => void; canDe
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Reports() {
   const user = useAuthStore(s => s.user);
+  const selectedWorker = useAuthStore(s => s.selectedWorker);
   const isViewer = user?.role === 'CUSTOMER';
   const [activeTab, setActiveTab]   = useState<ReportType | null>(null);
   const [rows, setRows]             = useState<any[]>([]);
@@ -663,6 +664,8 @@ export default function Reports() {
       const params = new URLSearchParams();
       if (dateFrom) params.set('from', dateFrom);
       if (dateTo)   params.set('to', dateTo);
+      const wc = selectedWorker?.warehouseCode;
+      if (wc) params.set('warehouseCode', wc);
       const url = `${API}${cfg.endpoint}${params.toString() ? '?'+params : ''}`;
       const res  = await fetch(url);
       const json = await res.json();
@@ -697,12 +700,13 @@ export default function Reports() {
       const monthName = new Date(pptYear, pptMonth-1,1).toLocaleString('en-IN',{month:'long'});
 
       setPptStatus('Fetching data…');
+      const wcSuffix = selectedWorker?.warehouseCode ? `&warehouseCode=${selectedWorker.warehouseCode}` : '';
       const [j1,j2,j3,j4,j5] = await Promise.all([
-        fetch(`${API}/inward?from=${mFrom}&to=${mTo}`).then(r=>r.json()),
-        fetch(`${API}/outward?from=${mFrom}&to=${mTo}`).then(r=>r.json()),
-        fetch(`${API}/inventory`).then(r=>r.json()),
+        fetch(`${API}/inward?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
+        fetch(`${API}/outward?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
+        fetch(`${API}/inventory${selectedWorker?.warehouseCode ? '?warehouseCode='+selectedWorker.warehouseCode : ''}`).then(r=>r.json()),
         fetch(`${API}/cycle-count/records?from=${mFrom}&to=${mTo}`).then(r=>r.json()),
-        fetch(`${API}/inward/discrepancies?from=${mFrom}&to=${mTo}`).then(r=>r.json()),
+        fetch(`${API}/inward/discrepancies?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
       ]);
       const inwardRows:any[]    = Array.isArray(j1) ? j1 : [];
       const outwardRows:any[]   = Array.isArray(j2) ? j2 : [];

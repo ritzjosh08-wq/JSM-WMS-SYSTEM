@@ -293,6 +293,7 @@ function parseCF(s: string | null | undefined): any {
 
 export default function OutwardClient() {
   const user = useAuthStore(s => s.user);
+  const selectedWorker = useAuthStore(s => s.selectedWorker);
   const isViewer = user?.role === 'CUSTOMER';
   const draft = loadDraft();
   const [header, setHeader] = useState<DispatchHeader>(draft?.header ?? {
@@ -392,7 +393,9 @@ export default function OutwardClient() {
     }
     updateLine(line.id, { matchStatus: "LOADING" });
     try {
-      const res = await fetch(`${API}/outward/fifo?materialCode=${encodeURIComponent(line.materialCode)}&requiredQty=${line.requiredQty}`);
+      const wc = selectedWorker?.warehouseCode;
+      const wcParam = wc ? `&warehouseCode=${wc}` : '';
+      const res = await fetch(`${API}/outward/fifo?materialCode=${encodeURIComponent(line.materialCode)}&requiredQty=${line.requiredQty}${wcParam}`);
       const data = await res.json();
       const recs: FifoRec[] = data.recommendations || [];
       const pickedTotal = recs.reduce((s, r) => s + r.recommendedPick, 0);
@@ -610,10 +613,13 @@ export default function OutwardClient() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <h1 style={{ fontSize: "20px", fontWeight: 900, color: "#0f172a", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
-            <Truck size={22} style={{ color: "#059669" }} /> Outbound Dispatch
+            <Truck size={22} style={{ color: "#059669" }} />
+            {selectedWorker ? `Outbound — ${selectedWorker.name}` : 'Outbound Dispatch'}
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
-            {isViewer ? "View dispatch records and inventory movements" : "Enter HU unit codes → Find matching inventory → Select & Confirm Dispatch"}
+            {selectedWorker
+              ? `Dispatching from ${selectedWorker.name}'s warehouse (${selectedWorker.warehouseCode || 'N/A'})`
+              : isViewer ? "View dispatch records and inventory movements" : "Enter HU unit codes → Find matching inventory → Select & Confirm Dispatch"}
           </p>
         </div>
         {isViewer && (

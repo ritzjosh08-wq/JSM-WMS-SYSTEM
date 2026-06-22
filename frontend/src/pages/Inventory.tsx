@@ -738,6 +738,7 @@ function RectifyDiscrepancyModal({
 // ── Main component ─────────────────────────────────────────────────────────
 export default function InventoryClient() {
   const user = useAuthStore(s => s.user);
+  const selectedWorker = useAuthStore(s => s.selectedWorker);
   const isViewer = user?.role === 'CUSTOMER';
   const [raw, setRaw]           = useState<InventoryItem[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
@@ -765,7 +766,9 @@ export default function InventoryClient() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API}/inventory`);
+      const wc = selectedWorker?.warehouseCode;
+      const url = wc ? `${API}/inventory?warehouseCode=${wc}` : `${API}/inventory`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRaw(Array.isArray(data.inventory) ? data.inventory : []);
@@ -780,7 +783,7 @@ export default function InventoryClient() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedWorker]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1025,9 +1028,11 @@ export default function InventoryClient() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <h1 style={{ fontSize: "20px", fontWeight: 800, color: "#0f172a", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
-            <Package size={22} style={{ color: "#2563eb" }} /> Inventory
+            <Package size={22} style={{ color: "#2563eb" }} />
+            {selectedWorker ? `${selectedWorker.name}'s Inventory` : 'Inventory'}
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
+            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || 'N/A'} · ` : ''}
             Live stock · Updated {lastRefresh.toLocaleTimeString("en-IN")}
           </p>
         </div>

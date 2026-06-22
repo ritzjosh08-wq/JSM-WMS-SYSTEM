@@ -6,7 +6,16 @@ const prisma = new PrismaClient();
 
 router.get('/', async (req, res) => {
   try {
+    // ── Optional worker filter: ?warehouseCode=CM35 ──────────────────────────
+    const warehouseCode = (req.query.warehouseCode as string | undefined)?.trim().toUpperCase();
+    let warehouseIdFilter: string | undefined;
+    if (warehouseCode) {
+      const wh = await prisma.warehouse.findFirst({ where: { code: warehouseCode } });
+      warehouseIdFilter = wh?.id;
+    }
+
     const inventory = await prisma.inventoryBatch.findMany({
+      where: warehouseIdFilter ? { warehouseId: warehouseIdFilter } : undefined,
       include: {
         material: true,
         warehouse: true,

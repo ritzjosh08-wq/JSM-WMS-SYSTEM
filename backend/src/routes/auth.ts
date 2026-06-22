@@ -21,12 +21,13 @@ function saveCustomerPerms(perms: Record<string, string[]>) {
 }
 
 interface UserRecord {
-  username: string;
-  password: string;
-  name: string;
-  role: 'ADMIN' | 'WORKER' | 'CUSTOMER';
-  location: string;
-  dynamic?: boolean;
+  username:      string;
+  password:      string;
+  name:          string;
+  role:          'ADMIN' | 'WORKER' | 'CUSTOMER';
+  location:      string;
+  warehouseCode?: string;   // ← warehouse this worker manages (e.g. "CM35")
+  dynamic?:      boolean;
 }
 
 function loadDynamicUsers(): UserRecord[] {
@@ -39,10 +40,10 @@ function saveDynamicUsers(users: UserRecord[]) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
 }
 
-// ─── Built-in accounts (cannot be deleted via UI) ────────────────────────────
+// ─── Built-in accounts ────────────────────────────────────────────────────────
 const BASE_USERS: UserRecord[] = [
   { username: 'admin',       password: 'admin123',   name: 'Admin',              role: 'ADMIN',    location: 'All Warehouses' },
-  { username: 'chennaippd',  password: 'chennai123', name: 'Chennai Worker PPD', role: 'WORKER',   location: 'Chennai PPD' },
+  { username: 'chennaippd',  password: 'chennai123', name: 'Chennai Worker PPD', role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'CM35' },
   { username: 'chennaicust', password: 'chennai123', name: 'Chennai PPD',        role: 'CUSTOMER', location: 'Chennai PPD' },
 ];
 
@@ -66,7 +67,13 @@ router.post('/login', async (req, res) => {
   }
   res.json({
     success: true,
-    user: { username: user.username, name: user.name, role: user.role, location: user.location },
+    user: {
+      username:      user.username,
+      name:          user.name,
+      role:          user.role,
+      location:      user.location,
+      warehouseCode: user.warehouseCode || null,
+    },
   });
 });
 
@@ -74,23 +81,43 @@ router.post('/logout', (_req, res) => {
   res.json({ success: true });
 });
 
-// ── GET /auth/permissions ─────────────────────────────────────────────────────
-router.get('/permissions', (_req, res) => {
-  const savedPerms = loadCustomerPerms();
+// ── GET /auth/workers — all WORKER users with their warehouse info ─────────────
+router.get('/workers', async (_req, res) => {
   const all = getAllUsers();
-  const allLocations = [...new Set(
-    all.filter(u => u.role !== 'ADMIN').map(u => u.location)
-  )];
+  const workers = all
+    .filter(u => u.role === 'WORKER')
+    .map(u => ({
+      username:      u.username,
+      name:          u.name,
+      location:      u.location,
+      warehouseCode: u.warehouseCode || null,
+    }));
+  res.json({ workers });
+});
+
+// ── GET /auth/permissions ─────────────────────────────────────────────────────
+router.get('/permissions', async (_req, res) => {
+  const savedPerms  = loadCustomerPerms();
+  const all         = getAllUsers();
+
+  // Resolve all unique warehouse codes for dropdown
+  const whCodes = [...new Set(all.filter(u => u.role === 'WORKER' && u.warehouseCode).map(u => u.warehouseCode as string))];
+  // Also fetch any warehouses in DB
+  const dbWarehouses = await prisma.warehouse.findMany({ where: { isActive: true }, select: { code: true, name: true } });
+  const allLocations = [...new Set([...dbWarehouses.map(w => w.code), ...whCodes])];
+
   const users = all.map(u => ({
-    username: u.username,
-    name:     u.name,
-    role:     u.role,
-    location: u.location,
-    dynamic:  !!u.dynamic,
+    username:         u.username,
+    name:             u.name,
+    role:             u.role,
+    location:         u.location,
+    warehouseCode:    u.warehouseCode || null,
+    dynamic:          !!u.dynamic,
     allowedLocations: u.role === 'CUSTOMER'
       ? [u.location, ...(savedPerms[u.username] || []).filter((l: string) => l !== u.location)]
       : [],
   }));
+
   res.json({ users, allLocations });
 });
 
@@ -113,8 +140,8 @@ router.put('/permissions', (req, res) => {
 });
 
 // ── POST /auth/users — create new account ─────────────────────────────────────
-router.post('/users', (req, res) => {
-  const { username, password, name, role, location } = req.body as Partial<UserRecord>;
+router.post('/users', async (req, res) => {
+  const { username, password, name, role, location, warehouseCode } = req.body as Partial<UserRecord>;
 
   if (!username || !password || !name || !role || !location) {
     return res.status(400).json({ error: 'username, password, name, role, and location are all required' });
@@ -128,13 +155,31 @@ router.post('/users', (req, res) => {
     return res.status(409).json({ error: `Username "${username}" is already taken` });
   }
 
+  // If worker has a new warehouseCode not yet in DB, auto-create the warehouse
+  if (role === 'WORKER' && warehouseCode) {
+    const existing = await prisma.warehouse.findFirst({ where: { code: warehouseCode.trim().toUpperCase() } });
+    if (!existing) {
+      await prisma.warehouse.create({
+        data: {
+          code:          warehouseCode.trim().toUpperCase(),
+          name:          `${name}'s Warehouse`,
+          storageType:   'MIXED',
+          isActive:      true,
+          totalCapacity: 10000,
+          usedCapacity:  0,
+        },
+      });
+    }
+  }
+
   const newUser: UserRecord = {
-    username: username.toLowerCase().trim(),
-    password: password.trim(),
-    name:     name.trim(),
+    username:      username.toLowerCase().trim(),
+    password:      password.trim(),
+    name:          name.trim(),
     role,
-    location: location.trim(),
-    dynamic:  true,
+    location:      location.trim(),
+    warehouseCode: role === 'WORKER' && warehouseCode ? warehouseCode.trim().toUpperCase() : undefined,
+    dynamic:       true,
   };
 
   const dynamic = loadDynamicUsers();
@@ -143,7 +188,7 @@ router.post('/users', (req, res) => {
 
   res.json({
     success: true,
-    user: { username: newUser.username, name: newUser.name, role: newUser.role, location: newUser.location },
+    user: { username: newUser.username, name: newUser.name, role: newUser.role, location: newUser.location, warehouseCode: newUser.warehouseCode },
   });
 });
 

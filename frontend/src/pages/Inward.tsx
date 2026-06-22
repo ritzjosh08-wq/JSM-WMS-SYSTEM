@@ -964,6 +964,7 @@ const hasEntryDiscrepancy = (e: ManualEntry): boolean =>
 // ─────────────────────────────────────────────────────────────────────────────
 export default function InwardClient() {
   const user = useAuthStore(s => s.user);
+  const selectedWorker = useAuthStore(s => s.selectedWorker);
   const isViewer = user?.role === 'CUSTOMER';
   const [entries, setEntries] = useState<ManualEntry[]>([]);
   const [formOpen, setFormOpen] = useState(false);
@@ -1288,9 +1289,14 @@ export default function InwardClient() {
       <div className="flex items-start justify-between flex-shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <ClipboardList size={24} className="text-blue-600" /> Inward Entry
+            <ClipboardList size={24} className="text-blue-600" />
+            {selectedWorker ? `Inward Entry — ${selectedWorker.name}` : 'Inward Entry'}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">Record goods received at the gate — manually or via Excel upload</p>
+          <p className="text-sm text-gray-500 mt-1">
+            {selectedWorker
+              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || 'N/A'}`
+              : 'Record goods received at the gate — manually or via Excel upload'}
+          </p>
         </div>
         <div className="flex gap-2 items-center">
           {isViewer && (

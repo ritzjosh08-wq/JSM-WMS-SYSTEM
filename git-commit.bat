@@ -30,7 +30,7 @@ git status --short
 
 echo.
 echo [4/5] Committing...
-git commit -m "feat: MaterialMaster warehouse charts (CM35 floor+rack, FG05), activity line chart, RM pie cleanup"
+git commit -m "feat: Admin multi-worker — WorkerSwitcher, per-worker dashboard, all pages filter by selected worker warehouse"
 
 echo.
 echo [5/5] Pushing to GitHub...

@@ -89,12 +89,17 @@ router.post('/parse-excel', express.json({ limit: '25mb' }), (req, res) => {
 // GET all inward entries (for reports)
 router.get('/', async (req, res) => {
   try {
-    const { from, to } = req.query;
+    const { from, to, warehouseCode } = req.query;
     const where: any = {};
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(String(from));
       if (to) { const d = new Date(String(to)); d.setHours(23,59,59,999); where.createdAt.lte = d; }
+    }
+    // Filter by worker's warehouse via line items
+    if (warehouseCode) {
+      const wh = await prisma.warehouse.findFirst({ where: { code: String(warehouseCode).trim().toUpperCase() } });
+      if (wh) where.lineItems = { some: { warehouseId: wh.id } };
     }
     const entries = await prisma.inwardEntry.findMany({
       where,

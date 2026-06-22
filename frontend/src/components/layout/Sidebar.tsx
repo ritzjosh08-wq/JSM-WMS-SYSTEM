@@ -5,6 +5,7 @@ import {
   ClipboardList, FileBarChart, Box, ChevronRight, LogOut
 } from "lucide-react";
 import { useAuthStore } from "../../store/authStore";
+import WorkerSwitcher from "./WorkerSwitcher";
 
 // roles: ADMIN = super-user all warehouses | WORKER = full ops | CUSTOMER = view-only all modules
 const ALL_NAV_LINKS = [
@@ -31,6 +32,7 @@ export default function Sidebar() {
   const { user, logout } = useAuthStore();
 
   const role = user?.role ?? '';
+  const isAdmin = role === 'ADMIN';
   const navLinks = ALL_NAV_LINKS.filter(l => l.roles.includes(role));
   const isCustomer = role === 'CUSTOMER';
 
@@ -89,6 +91,9 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      {/* Worker Switcher — Admin only */}
+      {isAdmin && <WorkerSwitcher />}
 
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: "auto", padding: "10px 10px 12px" }}>
