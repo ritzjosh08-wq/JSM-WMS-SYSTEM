@@ -8,7 +8,7 @@ dotenv.config();
 const prisma = new PrismaClient();
 const app = express();
 
-// ── Startup migration: add columns that may be missing from older DB
+// ── Startup migration: add columns/tables that may be missing from older DB ───
 async function runMigrations() {
   try {
     await prisma.$executeRawUnsafe(`ALTER TABLE "OutwardEntry" ADD COLUMN "lrNumber" TEXT`);
@@ -17,6 +17,43 @@ async function runMigrations() {
   try {
     await prisma.$executeRawUnsafe(`ALTER TABLE "OutwardLineItem" ADD COLUMN "description" TEXT`);
     console.log('Migration: added description to OutwardLineItem');
+  } catch {}
+
+  // ── Cycle Count v2 ─────────────────────────────────────────────────────────
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "WeeklyCycleTask" (
+        "id"          TEXT PRIMARY KEY,
+        "warehouseId" TEXT NOT NULL,
+        "weekStart"   TEXT NOT NULL,
+        "totalBins"   INTEGER NOT NULL DEFAULT 0,
+        "binsPerDay"  INTEGER NOT NULL DEFAULT 0,
+        "status"      TEXT NOT NULL DEFAULT 'ACTIVE',
+        "createdAt"   TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_wct_wh_week ON "WeeklyCycleTask"("warehouseId","weekStart")`);
+  } catch {}
+  // Add completedAt to WeeklyCycleTask if missing (one-time migration)
+  try {
+    await prisma.$executeRawUnsafe(`ALTER TABLE "WeeklyCycleTask" ADD COLUMN "completedAt" TEXT`);
+    console.log('Migration: added completedAt to WeeklyCycleTask');
+  } catch {}
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "DailyCycleSession" (
+        "id"            TEXT PRIMARY KEY,
+        "taskId"        TEXT NOT NULL,
+        "dayNumber"     INTEGER NOT NULL,
+        "scheduledDate" TEXT NOT NULL,
+        "binIds"        TEXT NOT NULL DEFAULT '[]',
+        "checkedBins"   TEXT NOT NULL DEFAULT '[]',
+        "status"        TEXT NOT NULL DEFAULT 'PENDING',
+        "completedAt"   TEXT,
+        "completedBy"   TEXT,
+        FOREIGN KEY ("taskId") REFERENCES "WeeklyCycleTask"("id") ON DELETE CASCADE
+      )`);
+    console.log('Cycle count v2 tables ready');
   } catch {}
 }
 runMigrations();

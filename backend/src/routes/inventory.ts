@@ -26,7 +26,11 @@ router.get('/', async (req, res) => {
       orderBy: { receiptDate: 'asc' }
     });
 
-    const warehouses = await prisma.warehouse.findMany({ where: { isActive: true } });
+    // Only return real warehouses — exclude the legacy WH-DEFAULT placeholder
+    const warehouses = await prisma.warehouse.findMany({
+      where: { isActive: true, NOT: { code: 'WH-DEFAULT' } },
+      orderBy: { code: 'asc' },
+    });
 
     // ── Enrich numberOfBoxes from InwardLineItem for batches that lack it ──
     // (handles records committed before the field was added to invCustomFields)

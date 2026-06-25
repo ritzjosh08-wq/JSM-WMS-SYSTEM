@@ -9,7 +9,7 @@ import { useAuthStore } from '../store/authStore';
 
 const API = 'http://localhost:5001/api';
 
-type ReportType = 'inward' | 'outward' | 'inventory' | 'cycle-count' | 'discrepancy';
+type ReportType = 'inward' | 'outward' | 'inventory' | 'cycle-count' | 'discrepancy' | 'cc-discrepancy';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 // Parse dates stored in both ISO (YYYY-MM-DD / DateTime) and DD-MM-YYYY / DD/MM/YYYY formats
@@ -49,6 +49,22 @@ function flattenDiscrepancy(rows: any[]): any[] {
     receivedQtyInNos: r.receivedQtyInNos, receivedNetWeight: r.receivedNetWeight,
     shortInPallet: r.shortInPallet, shortExcessInKg: r.shortExcessInKg,
     discrepancyRemarks: r.discrepancyRemarks,
+  }));
+}
+
+function flattenCCDiscrepancy(rows: any[]): any[] {
+  return rows.map(r => ({
+    weekStart:     r.weekStart,
+    scheduledDate: r.scheduledDate,
+    warehouseCode: r.warehouseCode,
+    warehouseName: r.warehouseName,
+    locationType:  r.locationType,
+    zone:          r.zone,
+    binCode:       r.binCode,
+    checkedBy:     r.checkedBy,
+    checkedAt:     r.checkedAt ? new Date(r.checkedAt).toLocaleString('en-IN') : '—',
+    completedBy:   r.completedBy,
+    remarks:       r.remarks || '—',
   }));
 }
 
@@ -145,7 +161,22 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
       };
     });
   }
-  if (type === 'discrepancy') return flattenDiscrepancy(rows);
+  if (type === 'cycle-count') {
+    return rows.map((r: any) => ({
+      weekStart:        r.weekStart,
+      weekEnd:          r.weekEnd,
+      warehouseCode:    r.warehouseCode,
+      warehouseName:    r.warehouseName,
+      totalLocations:   r.totalBins,
+      checkedOK:        r.okCount,
+      discrepancies:    r.discrepancyCount,
+      unchecked:        r.uncheckedCount,
+      completedOn:      r.completedAt ? new Date(r.completedAt).toLocaleString('en-IN') : '—',
+      status:           r.status,
+    }));
+  }
+  if (type === 'discrepancy')    return flattenDiscrepancy(rows);
+  if (type === 'cc-discrepancy') return flattenCCDiscrepancy(rows);
   return rows;
 }
 
@@ -235,7 +266,8 @@ const TABS = [
   { id: 'outward'     as ReportType, label: 'Outward Report',     icon: ArrowUpFromLine,  color: '#059669', bg: '#ecfdf5', border: '#a7f3d0', endpoint: '/outward' },
   { id: 'inventory'   as ReportType, label: 'Inventory Report',   icon: Package,          color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe', endpoint: '/inventory' },
   { id: 'cycle-count'  as ReportType, label: 'Cycle Count Report',  icon: ClipboardList, color: '#d97706', bg: '#fffbeb', border: '#fde68a', endpoint: '/cycle-count/records' },
-  { id: 'discrepancy' as ReportType, label: 'Discrepancy Report',  icon: AlertTriangle, color: '#dc2626', bg: '#fef2f2', border: '#fecaca', endpoint: '/inward/discrepancies' },
+  { id: 'discrepancy'    as ReportType, label: 'Inward Discrepancy',    icon: AlertTriangle, color: '#dc2626', bg: '#fef2f2', border: '#fecaca', endpoint: '/inward/discrepancies' },
+  { id: 'cc-discrepancy' as ReportType, label: 'Cycle Count Discrepancy', icon: XCircle,      color: '#be185d', bg: '#fdf2f8', border: '#f9a8d4', endpoint: '/cycle-count/discrepancy-report' },
 ];
 
 // ─── Delete endpoint per type ─────────────────────────────────────────────────
@@ -511,35 +543,68 @@ function InventoryTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: 
   );
 }
 
-function CycleCountTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (id: string) => void; canDelete?: boolean }) {
+function CycleCountTable({ rows }: { rows: any[] }) {
+  // Totals across all completed weeks
+  const totals = rows.reduce((acc, r) => ({
+    totalBins:        acc.totalBins        + (Number(r.totalBins)        || 0),
+    okCount:          acc.okCount          + (Number(r.okCount)          || 0),
+    discrepancyCount: acc.discrepancyCount + (Number(r.discrepancyCount) || 0),
+    uncheckedCount:   acc.uncheckedCount   + (Number(r.uncheckedCount)   || 0),
+  }), { totalBins: 0, okCount: 0, discrepancyCount: 0, uncheckedCount: 0 });
+
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead><tr>
-        {['Count ID','Date','Material Code','Type of Material','Invoice No.','Warehouse','System Qty','Physical Qty','Variance','Status',''].map(h =>
+        {['Week (Mon–Sat)','Warehouse','Total Locations','Checked OK','Discrepancies','Unchecked','Completed On','Status'].map(h =>
           <th key={h} style={TH}>{h}</th>)}
       </tr></thead>
       <tbody>{rows.map((r, i) => {
-        const variance = r.varianceQty;
-        const isShort = variance !== null && variance < 0;
-        const isOver  = variance !== null && variance > 0;
+        const pct    = r.totalBins > 0 ? Math.round((r.okCount / r.totalBins) * 100) : 0;
+        const hasDisc = r.discrepancyCount > 0;
         return (
-          <tr key={r.id} style={{ background: i%2===0?'#fff':'#f8fafc' }}>
-            <td style={{...TD,fontFamily:'monospace',fontWeight:700,color:'#d97706'}}>{r.countId}</td>
-            <td style={TD}>{fmtDate(r.countDate)}</td>
-            <td style={{...TD,fontFamily:'monospace',fontWeight:700,color:'#1e40af'}}>{r.materialCode}</td>
-            <td style={{...TD,color:'#0891b2',fontWeight:600}}>{r.materialType||'—'}</td>
-            <td style={{...TD,fontFamily:'monospace',fontSize:'10px'}}>{r.batchNumber||'—'}</td>
-            <td style={TD}>{r.warehouseCode||'—'}</td>
-            <td style={{...TD,textAlign:'right',fontWeight:700}}>{Number(r.systemQty).toFixed(2)}</td>
-            <td style={{...TD,textAlign:'right',fontWeight:700}}>{r.physicalQty!=null?Number(r.physicalQty).toFixed(2):'—'}</td>
-            <td style={{...TD,textAlign:'right',fontWeight:900,color:isShort?'#dc2626':isOver?'#d97706':'#059669'}}>
-              {variance!=null?(variance>0?`+${Number(variance).toFixed(2)}`:Number(variance).toFixed(2)):'—'}
+          <tr key={r.id} style={{ background: i%2===0?'#fff':'#f8fafc', borderLeft: hasDisc ? '3px solid #d97706' : '3px solid #a7f3d0' }}>
+            <td style={{...TD, fontFamily:'monospace', fontWeight:700, color:'#d97706'}}>
+              {r.weekStart} → {r.weekEnd}
             </td>
-            <td style={TD}><span style={{background:r.status==='MATCH'?'#ecfdf5':r.status==='SHORTAGE'?'#fef2f2':'#fffbeb',color:r.status==='MATCH'?'#059669':r.status==='SHORTAGE'?'#dc2626':'#d97706',border:'1px solid',borderColor:r.status==='MATCH'?'#a7f3d0':r.status==='SHORTAGE'?'#fecaca':'#fde68a',borderRadius:'20px',padding:'1px 8px',fontSize:'10px',fontWeight:700}}>{r.status}</span></td>
-            <td style={{...TD,textAlign:'center'}}><DeleteBtn onDelete={() => onDelete(r.id)} canDelete={canDelete} /></td>
+            <td style={{...TD, fontWeight:700, color:'#7c3aed'}}>
+              {r.warehouseCode}
+              <span style={{fontWeight:400,color:'#94a3b8',fontSize:'10px',display:'block'}}>{r.warehouseName}</span>
+            </td>
+            <td style={{...TD, textAlign:'right', fontWeight:700}}>{r.totalBins}</td>
+            <td style={{...TD, textAlign:'right', fontWeight:800, color:'#059669'}}>
+              {r.okCount}
+              <span style={{fontWeight:400,color:'#94a3b8',fontSize:'10px'}}> ({pct}%)</span>
+            </td>
+            <td style={{...TD, textAlign:'right', fontWeight:800, color: hasDisc ? '#dc2626' : '#059669'}}>
+              {r.discrepancyCount}
+            </td>
+            <td style={{...TD, textAlign:'right', fontWeight:700, color: r.uncheckedCount > 0 ? '#b45309' : '#059669'}}>
+              {r.uncheckedCount}
+            </td>
+            <td style={{...TD, fontSize:'11px'}}>
+              {r.completedAt ? new Date(r.completedAt).toLocaleString('en-IN') : '—'}
+            </td>
+            <td style={TD}>
+              <span style={{
+                background:'#ecfdf5', color:'#059669', border:'1px solid #a7f3d0',
+                borderRadius:'20px', padding:'1px 8px', fontSize:'10px', fontWeight:700
+              }}>COMPLETED</span>
+            </td>
           </tr>
         );
       })}</tbody>
+      {rows.length > 0 && (
+        <tfoot>
+          <tr style={{background:'#fffbeb',fontWeight:800,borderTop:'2px solid #fde68a'}}>
+            <td style={{...TD,color:'#92400e'}} colSpan={2}>TOTAL ({rows.length} completed week{rows.length!==1?'s':''})</td>
+            <td style={{...TD,textAlign:'right',color:'#92400e'}}>{totals.totalBins}</td>
+            <td style={{...TD,textAlign:'right',color:'#059669'}}>{totals.okCount}</td>
+            <td style={{...TD,textAlign:'right',color:totals.discrepancyCount>0?'#dc2626':'#059669'}}>{totals.discrepancyCount}</td>
+            <td style={{...TD,textAlign:'right',color:totals.uncheckedCount>0?'#b45309':'#059669'}}>{totals.uncheckedCount}</td>
+            <td colSpan={2} style={TD}></td>
+          </tr>
+        </tfoot>
+      )}
     </table>
   );
 }
@@ -588,6 +653,49 @@ function DiscrepancyTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete
           </tr>
         );
       })}</tbody>
+    </table>
+  );
+}
+
+function CycleCountDiscrepancyTable({ rows }: { rows: any[] }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead><tr>
+        {['Week Start','Date','Warehouse','Location Type','Zone / Rack','Bin Code',
+          'Checked By','Checked At','Completed By','Remarks'].map(h => <th key={h} style={TH}>{h}</th>)}
+      </tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={r.id || i} style={{ background: i%2===0 ? '#fff' : '#fdf2f8', borderLeft: '3px solid #be185d' }}>
+          <td style={{...TD, fontFamily:'monospace', fontSize:'11px', color:'#9d174d'}}>{r.weekStart}</td>
+          <td style={TD}>{fmtDate(r.scheduledDate)}</td>
+          <td style={{...TD, fontWeight:700, color:'#7c3aed'}}>{r.warehouseCode} <span style={{fontWeight:400,color:'#94a3b8',fontSize:'10px'}}>({r.warehouseName})</span></td>
+          <td style={TD}>
+            <span style={{
+              background: r.locationType === 'FLOOR' ? '#f0fdf4' : '#eff6ff',
+              color: r.locationType === 'FLOOR' ? '#166534' : '#1e40af',
+              border: `1px solid ${r.locationType === 'FLOOR' ? '#86efac' : '#bfdbfe'}`,
+              borderRadius: '20px', padding: '1px 8px', fontSize: '10px', fontWeight: 700,
+            }}>{r.locationType}</span>
+          </td>
+          <td style={{...TD, fontFamily:'monospace', color:'#374151'}}>{r.zone || '—'}</td>
+          <td style={{...TD, fontFamily:'monospace', fontWeight:700, color:'#be185d'}}>{r.binCode}</td>
+          <td style={TD}>{r.checkedBy || '—'}</td>
+          <td style={{...TD, fontSize:'11px'}}>{r.checkedAt ? new Date(r.checkedAt).toLocaleString('en-IN') : '—'}</td>
+          <td style={TD}>{r.completedBy || '—'}</td>
+          <td style={{...TD, color: r.remarks ? '#b91c1c' : '#94a3b8', fontStyle: r.remarks ? 'normal' : 'italic', maxWidth:'200px', overflow:'hidden', textOverflow:'ellipsis'}}>
+            {r.remarks || 'No remarks'}
+          </td>
+        </tr>
+      ))}</tbody>
+      {rows.length > 0 && (
+        <tfoot>
+          <tr style={{background:'#fdf2f8',fontWeight:800,borderTop:'2px solid #f9a8d4'}}>
+            <td style={{...TD,color:'#9d174d'}} colSpan={10}>
+              TOTAL: {rows.length} discrepanc{rows.length === 1 ? 'y' : 'ies'} flagged
+            </td>
+          </tr>
+        </tfoot>
+      )}
     </table>
   );
 }
@@ -1071,11 +1179,12 @@ export default function Reports() {
 
   // Active display rows for the current tab
   const displayRows =
-    activeTab === 'inward'       ? inwardDisplayRows :
-    activeTab === 'outward'      ? outwardDisplayRows :
-    activeTab === 'inventory'    ? inventoryDisplayRows :
-    activeTab === 'cycle-count'  ? cycleDisplayRows :
-    activeTab === 'discrepancy'  ? discrepancyDisplayRows :
+    activeTab === 'inward'          ? inwardDisplayRows :
+    activeTab === 'outward'         ? outwardDisplayRows :
+    activeTab === 'inventory'       ? inventoryDisplayRows :
+    activeTab === 'cycle-count'     ? cycleDisplayRows :
+    activeTab === 'discrepancy'     ? discrepancyDisplayRows :
+    activeTab === 'cc-discrepancy'  ? filteredRows :
     filteredRows;
 
   const handleDelete = async (id: string) => {
@@ -1436,8 +1545,9 @@ export default function Reports() {
               {activeTab === 'inward'      && <InwardTable      rows={inwardDisplayRows}      onDelete={handleDelete} />}
               {activeTab === 'outward'     && <OutwardTable     rows={outwardDisplayRows}     onDelete={handleDelete} />}
               {activeTab === 'inventory'   && <InventoryTable   rows={inventoryDisplayRows}   onDelete={handleDelete} />}
-              {activeTab === 'cycle-count' && <CycleCountTable  rows={cycleDisplayRows}       onDelete={handleDelete} />}
-              {activeTab === 'discrepancy' && <DiscrepancyTable rows={discrepancyDisplayRows} onDelete={handleDelete} />}
+              {activeTab === 'cycle-count'    && <CycleCountTable             rows={cycleDisplayRows} />}
+              {activeTab === 'discrepancy'    && <DiscrepancyTable            rows={discrepancyDisplayRows} onDelete={handleDelete} />}
+              {activeTab === 'cc-discrepancy' && <CycleCountDiscrepancyTable  rows={filteredRows} />}
             </div>
           )}
         </div>

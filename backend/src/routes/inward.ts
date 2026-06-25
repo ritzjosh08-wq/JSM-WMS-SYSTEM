@@ -126,20 +126,12 @@ router.post('/commit', async (req, res) => {
       groups.get(key).push(e);
     }
 
-    // Find or auto-create a default warehouse so commit never fails due to missing warehouse
-    let defaultWarehouse = await prisma.warehouse.findFirst();
-    if (!defaultWarehouse) {
-      defaultWarehouse = await prisma.warehouse.create({
-        data: {
-          code: 'WH-DEFAULT',
-          name: 'JSM Main Warehouse',
-          storageType: 'MIXED',
-          isActive: true,
-          totalCapacity: 999999,
-          usedCapacity: 0,
-        },
-      });
-    }
+    // Default warehouse: prefer CM35, then any active warehouse.
+    // Never auto-create a placeholder — real warehouses are seeded via /api/warehouse.
+    let defaultWarehouse =
+      await prisma.warehouse.findFirst({ where: { code: 'CM35' } }) ||
+      await prisma.warehouse.findFirst({ where: { isActive: true, NOT: { code: 'WH-DEFAULT' } } });
+    if (!defaultWarehouse) throw new Error('No warehouse found. Please ensure CM35 is seeded before committing inward entries.');
 
     for (const [invoiceKey, rows] of groups) {
       const first = rows[0];

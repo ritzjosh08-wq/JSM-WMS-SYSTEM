@@ -774,7 +774,12 @@ export default function InventoryClient() {
       setRaw(Array.isArray(data.inventory) ? data.inventory : []);
       setWarehouses(
         Array.isArray(data.warehouses)
-          ? data.warehouses.filter((w: any) => !/jsm/i.test(w.name || '') && !/jsm/i.test(w.code || ''))
+          ? data.warehouses.filter((w: any) =>
+              !/jsm/i.test(w.name || '') &&
+              !/jsm/i.test(w.code || '') &&
+              !/default/i.test(w.name || '') &&
+              !/^WH-?DEFAULT$/i.test(w.code || '')
+            )
           : []
       );
       setLastRefresh(new Date());

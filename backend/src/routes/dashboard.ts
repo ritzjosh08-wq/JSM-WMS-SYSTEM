@@ -121,7 +121,23 @@ router.get('/', async (req, res) => {
       warehouseId = wh?.id;
     }
 
-    const pendingCycleCounts = await prisma.cycleCount.count({ where: { status: 'PENDING' } });
+    // Pending cycle-count sessions (v2); fall back to legacy model if tables not ready
+    let pendingCycleCounts = 0;
+    try {
+      const _n = new Date();
+      const today = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
+      const ccRows  = await prisma.$queryRawUnsafe<[{count: any}]>(
+        `SELECT COUNT(*) as count FROM DailyCycleSession s
+         JOIN WeeklyCycleTask t ON s.taskId = t.id
+         WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS')
+           AND s.scheduledDate <= ?
+           AND t.status = 'ACTIVE'`,
+        today
+      );
+      pendingCycleCounts = Number(ccRows[0]?.count ?? 0);
+    } catch {
+      pendingCycleCounts = await prisma.cycleCount.count({ where: { status: 'PENDING' } }).catch(() => 0);
+    }
     const stats = await getStatsForWarehouse(warehouseId, wc);
 
     // Full binStats when no filter (legacy shape for Dashboard.tsx)
