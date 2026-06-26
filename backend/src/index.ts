@@ -55,6 +55,22 @@ async function runMigrations() {
       )`);
     console.log('Cycle count v2 tables ready');
   } catch {}
+
+  // ── One-time cleanup: delete the WH-DEFAULT placeholder warehouse ───────────
+  try {
+    const whDefault = await prisma.warehouse.findFirst({ where: { code: 'WH-DEFAULT' } });
+    if (whDefault) {
+      // Delete all linked records first (no cascade on these tables)
+      await prisma.inventoryBatch.deleteMany({ where: { warehouseId: whDefault.id } });
+      await prisma.inwardLineItem.deleteMany({ where: { warehouseId: whDefault.id } });
+      await prisma.outwardLineItem.deleteMany({ where: { warehouseId: whDefault.id } });
+      await prisma.floorLocation.deleteMany({ where: { warehouseId: whDefault.id } });
+      await prisma.warehouse.delete({ where: { id: whDefault.id } });
+      console.log('Cleanup: deleted WH-DEFAULT placeholder warehouse and all linked records');
+    }
+  } catch (e: any) {
+    console.warn('Cleanup WH-DEFAULT skipped:', e.message);
+  }
 }
 runMigrations();
 
