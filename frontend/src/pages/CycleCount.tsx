@@ -70,8 +70,9 @@ export default function CycleCount() {
       .then(json => {
         const whs = json.warehouses || [];
         setWarehouses(whs);
-        const workerWH = selectedWorker?.warehouseCode
-          ? whs.find((w: any) => w.code === selectedWorker.warehouseCode)
+        const activeCode = selectedWorker?.warehouseCode || selectedWorker?.warehouseCodes?.[0];
+        const workerWH = activeCode
+          ? whs.find((w: any) => w.code === activeCode)
           : null;
         const pick = workerWH || whs.find((w: any) => w.binCount > 0) || whs[0];
         if (pick) setSelectedWHId(pick.id);

@@ -2,11 +2,29 @@ import express from 'express';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
 const prisma = new PrismaClient();
 const app = express();
+
+// Ensure a Warehouse row exists for every worker's warehouseCode (e.g. SALEM1/2/3)
+async function ensureWorkerWarehouses() {
+  try {
+    const usersFile = path.join(__dirname, '../dynamic-users.json');
+    const dynamic: any[] = fs.existsSync(usersFile) ? JSON.parse(fs.readFileSync(usersFile, 'utf-8')) : [];
+    const codes = ['CM35', ...dynamic.filter(u => u.role === 'WORKER' && u.warehouseCode).map(u => String(u.warehouseCode).toUpperCase())];
+    for (const code of [...new Set(codes)]) {
+      const existing = await prisma.warehouse.findFirst({ where: { code } });
+      if (!existing) {
+        await prisma.warehouse.create({ data: { code, name: `${code} Warehouse`, storageType: 'MIXED', isActive: true, totalCapacity: 10000, usedCapacity: 0 } });
+        console.log(`Created warehouse ${code}`);
+      }
+    }
+  } catch (e) { console.warn('ensureWorkerWarehouses skipped:', e); }
+}
 
 // ── Startup migration: add columns/tables that may be missing from older DB ───
 async function runMigrations() {
@@ -56,7 +74,7 @@ async function runMigrations() {
     console.log('Cycle count v2 tables ready');
   } catch {}
 }
-runMigrations();
+runMigrations().then(ensureWorkerWarehouses);
 
 app.use(cors());
 app.use(express.json());

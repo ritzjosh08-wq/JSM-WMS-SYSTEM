@@ -6,17 +6,20 @@ const prisma = new PrismaClient();
 
 router.get('/', async (req, res) => {
   try {
-    const { from, to, warehouseCode } = req.query;
+    const { from, to, warehouseCode, warehouseCodes } = req.query;
     const where: any = {};
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(String(from));
       if (to) { const d = new Date(String(to)); d.setHours(23,59,59,999); where.createdAt.lte = d; }
     }
-    // Filter by worker's warehouse via line items
-    if (warehouseCode) {
-      const wh = await prisma.warehouse.findFirst({ where: { code: String(warehouseCode).trim().toUpperCase() } });
-      if (wh) where.lineItems = { some: { warehouseId: wh.id } };
+    const codeList = warehouseCodes
+      ? String(warehouseCodes).split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
+      : (warehouseCode ? [String(warehouseCode).trim().toUpperCase()] : []);
+    if (codeList.length) {
+      const whs = await prisma.warehouse.findMany({ where: { code: { in: codeList } }, select: { id: true } });
+      const ids = whs.map(w => w.id);
+      where.lineItems = { some: { warehouseId: { in: ids.length ? ids : ['__none__'] } } };
     }
     const entries = await prisma.outwardEntry.findMany({
       where,

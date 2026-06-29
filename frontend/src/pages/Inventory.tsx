@@ -4,7 +4,7 @@ import {
   ArrowUpFromLine, MapPin, Edit3, Check, X, ChevronUp, ChevronDown, Trash2,
   Grid3X3, History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck
 } from "lucide-react";
-import { useAuthStore } from "../store/authStore";
+import { useAuthStore, whQuery } from "../store/authStore";
 
 const API = "http://localhost:5001/api";
 
@@ -766,8 +766,7 @@ export default function InventoryClient() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const wc = selectedWorker?.warehouseCode;
-      const url = wc ? `${API}/inventory?warehouseCode=${wc}` : `${API}/inventory`;
+      const url = `${API}/inventory${whQuery(selectedWorker)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();

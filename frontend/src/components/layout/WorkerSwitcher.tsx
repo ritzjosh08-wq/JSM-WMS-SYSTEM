@@ -8,36 +8,50 @@ interface WorkerRecord {
   name: string;
   location: string;
   warehouseCode: string | null;
+  task?: string | null;
 }
 
 export default function WorkerSwitcher() {
-  const { selectedWorker, setSelectedWorker } = useAuthStore();
+  const { user, selectedWorker, setSelectedWorker } = useAuthStore();
   const [workers, setWorkers] = useState<WorkerRecord[]>([]);
   const [open, setOpen] = useState(false);
 
+  const isCustomer = user?.role === 'CUSTOMER';
+  const customerCodes = user?.warehouseCodes || [];
+
   useEffect(() => {
+    if (isCustomer) { setWorkers((user?.team || []) as WorkerRecord[]); return; }
     fetch('http://localhost:5001/api/auth/workers')
       .then(r => r.json())
       .then(json => setWorkers(json.workers || []))
       .catch(() => {});
-  }, []);
+  }, [isCustomer, user]);
+
+  const allLabel = isCustomer ? 'All my areas' : 'All Warehouses';
+  const allSub   = isCustomer ? 'Combined view' : 'Aggregated view';
+  const isAllSelected = isCustomer
+    ? (!!selectedWorker?.warehouseCodes && !selectedWorker?.warehouseCode)
+    : !selectedWorker;
 
   const current = selectedWorker
-    ? `${selectedWorker.name} (${selectedWorker.warehouseCode || 'N/A'})`
-    : 'All Warehouses';
+    ? (selectedWorker.warehouseCodes && !selectedWorker.warehouseCode
+        ? allLabel
+        : `${selectedWorker.name} (${selectedWorker.warehouseCode || 'N/A'})`)
+    : allLabel;
+
+  const selectAll = () => {
+    if (isCustomer && customerCodes.length) {
+      setSelectedWorker({ username: '__all__', name: 'All my areas', location: user?.location || '', warehouseCode: null, warehouseCodes: customerCodes });
+    } else {
+      setSelectedWorker(null);
+    }
+    setOpen(false);
+  };
 
   const select = (w: WorkerRecord | null) => {
-    if (!w) {
-      setSelectedWorker(null);
-    } else {
-      const sw: SelectedWorker = {
-        username: w.username,
-        name: w.name,
-        location: w.location,
-        warehouseCode: w.warehouseCode,
-      };
-      setSelectedWorker(sw);
-    }
+    if (!w) { selectAll(); return; }
+    const sw: SelectedWorker = { username: w.username, name: w.name, location: w.location, warehouseCode: w.warehouseCode };
+    setSelectedWorker(sw);
     setOpen(false);
   };
 
@@ -45,7 +59,7 @@ export default function WorkerSwitcher() {
     <div style={{ position: 'relative', margin: '10px 10px 2px' }}>
       {/* Label */}
       <div style={{ fontSize: '9px', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: '4px', paddingLeft: '2px' }}>
-        Viewing Worker
+        {isCustomer ? `Your Workers · ${workers.length}` : 'Viewing Worker'}
       </div>
 
       {/* Trigger */}
@@ -91,20 +105,20 @@ export default function WorkerSwitcher() {
         }}>
           {/* All Warehouses option */}
           <button
-            onClick={() => select(null)}
+            onClick={selectAll}
             style={{
               width: '100%',
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
               padding: '9px 12px',
-              background: !selectedWorker ? '#eff6ff' : 'transparent',
+              background: isAllSelected ? '#eff6ff' : 'transparent',
               border: 'none',
               borderBottom: '1px solid #f1f5f9',
               cursor: 'pointer',
               fontSize: '12px',
-              fontWeight: !selectedWorker ? 700 : 500,
-              color: !selectedWorker ? '#1d4ed8' : '#374151',
+              fontWeight: isAllSelected ? 700 : 500,
+              color: isAllSelected ? '#1d4ed8' : '#374151',
               textAlign: 'left',
             }}
           >
@@ -116,8 +130,8 @@ export default function WorkerSwitcher() {
               <Users size={12} style={{ color: '#64748b' }} />
             </div>
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 600 }}>All Warehouses</div>
-              <div style={{ fontSize: '10px', color: '#94a3b8' }}>Aggregated view</div>
+              <div style={{ fontSize: '12px', fontWeight: 600 }}>{allLabel}</div>
+              <div style={{ fontSize: '10px', color: '#94a3b8' }}>{allSub}</div>
             </div>
           </button>
 
@@ -168,7 +182,7 @@ export default function WorkerSwitcher() {
                       {w.name}
                     </div>
                     <div style={{ fontSize: '10px', color: '#94a3b8' }}>
-                      {w.warehouseCode || 'No warehouse'} · {w.username}
+                      {w.warehouseCode || 'No warehouse'} · {w.task || w.username}
                     </div>
                   </div>
                 </button>

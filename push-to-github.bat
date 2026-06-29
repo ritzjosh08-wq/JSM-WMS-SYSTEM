@@ -36,12 +36,13 @@ if errorlevel 1 git config user.email "ritzjosh08@gmail.com"
 git config user.name >nul 2>&1
 if errorlevel 1 git config user.name "Ritvik"
 
+if exist ".git\index.lock" del /f /q ".git\index.lock"
 echo Staging all changes...
 git add -A
 
 echo Checking for changes...
 git diff --cached --quiet
-if errorlevel 1 git commit -m "Auto-sync from local %DATE% %TIME%"
+if errorlevel 1 git commit -m "Customer portal: inventory carries inward/outward details; worker dropdown; remove inward/outward modules for customers; multi-warehouse scope"
 
 echo Pulling latest from GitHub via rebase...
 git pull --rebase origin main

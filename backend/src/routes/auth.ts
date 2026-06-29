@@ -27,7 +27,30 @@ interface UserRecord {
   role:          'ADMIN' | 'WORKER' | 'CUSTOMER';
   location:      string;
   warehouseCode?: string;   // ← warehouse this worker manages (e.g. "CM35")
+  task?:         string;    // ← what work this worker does (e.g. "Inward & Receiving")
   dynamic?:      boolean;
+}
+
+// ── Resolve locations + warehouse codes + worker team a CUSTOMER can see ──
+function getCustomerScope(username: string) {
+  const all         = getAllUsers();
+  const savedPerms  = loadCustomerPerms();
+  const me          = all.find(u => u.username === username);
+  const baseLoc     = me?.location ? [me.location] : [];
+  const extra       = (savedPerms[username] || []).filter((l: string) => !baseLoc.includes(l));
+  const locations   = [...baseLoc, ...extra];
+  const locSet      = new Set(locations.map(l => l.toLowerCase()));
+  const team = all
+    .filter(u => u.role === 'WORKER' && u.location && locSet.has(u.location.toLowerCase()))
+    .map(u => ({
+      username:      u.username,
+      name:          u.name,
+      location:      u.location,
+      warehouseCode: u.warehouseCode || null,
+      task:          u.task || null,
+    }));
+  const warehouseCodes = [...new Set(team.map(w => w.warehouseCode).filter(Boolean) as string[])];
+  return { locations, warehouseCodes, team };
 }
 
 function loadDynamicUsers(): UserRecord[] {
@@ -65,6 +88,7 @@ router.post('/login', async (req, res) => {
   if (!user) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  const scope = user.role === 'CUSTOMER' ? getCustomerScope(user.username) : null;
   res.json({
     success: true,
     user: {
@@ -73,6 +97,10 @@ router.post('/login', async (req, res) => {
       role:          user.role,
       location:      user.location,
       warehouseCode: user.warehouseCode || null,
+      task:          user.task || null,
+      allowedLocations: scope?.locations || [],
+      warehouseCodes:   scope?.warehouseCodes || [],
+      team:             scope?.team || [],
     },
   });
 });
@@ -91,6 +119,7 @@ router.get('/workers', async (_req, res) => {
       name:          u.name,
       location:      u.location,
       warehouseCode: u.warehouseCode || null,
+      task:          u.task || null,
     }));
   res.json({ workers });
 });
@@ -112,6 +141,7 @@ router.get('/permissions', async (_req, res) => {
     role:             u.role,
     location:         u.location,
     warehouseCode:    u.warehouseCode || null,
+    task:             u.task || null,
     dynamic:          !!u.dynamic,
     allowedLocations: u.role === 'CUSTOMER'
       ? [u.location, ...(savedPerms[u.username] || []).filter((l: string) => l !== u.location)]
@@ -141,7 +171,7 @@ router.put('/permissions', (req, res) => {
 
 // ── POST /auth/users — create new account ─────────────────────────────────────
 router.post('/users', async (req, res) => {
-  const { username, password, name, role, location, warehouseCode } = req.body as Partial<UserRecord>;
+  const { username, password, name, role, location, warehouseCode, task } = req.body as Partial<UserRecord>;
 
   if (!username || !password || !name || !role || !location) {
     return res.status(400).json({ error: 'username, password, name, role, and location are all required' });
@@ -179,6 +209,7 @@ router.post('/users', async (req, res) => {
     role,
     location:      location.trim(),
     warehouseCode: role === 'WORKER' && warehouseCode ? warehouseCode.trim().toUpperCase() : undefined,
+    task:          role === 'WORKER' && task ? task.trim() : undefined,
     dynamic:       true,
   };
 
@@ -188,7 +219,7 @@ router.post('/users', async (req, res) => {
 
   res.json({
     success: true,
-    user: { username: newUser.username, name: newUser.name, role: newUser.role, location: newUser.location, warehouseCode: newUser.warehouseCode },
+    user: { username: newUser.username, name: newUser.name, role: newUser.role, location: newUser.location, warehouseCode: newUser.warehouseCode, task: newUser.task },
   });
 });
 

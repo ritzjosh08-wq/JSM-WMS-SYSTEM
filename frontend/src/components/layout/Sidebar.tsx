@@ -10,8 +10,8 @@ import WorkerSwitcher from "./WorkerSwitcher";
 // roles: ADMIN = super-user all warehouses | WORKER = full ops | CUSTOMER = view-only all modules
 const ALL_NAV_LINKS = [
   { name: "Dashboard",          href: "/",                icon: LayoutDashboard,   section: "main",       roles: ["ADMIN","WORKER","CUSTOMER"] },
-  { name: "Inward Entry",       href: "/inward",          icon: ArrowDownToLine,   section: "operations", roles: ["ADMIN","WORKER","CUSTOMER"] },
-  { name: "Outbound Dispatch",  href: "/outward",         icon: ArrowUpFromLine,   section: "operations", roles: ["ADMIN","WORKER","CUSTOMER"] },
+  { name: "Inward Entry",       href: "/inward",          icon: ArrowDownToLine,   section: "operations", roles: ["ADMIN","WORKER"] },
+  { name: "Outbound Dispatch",  href: "/outward",         icon: ArrowUpFromLine,   section: "operations", roles: ["ADMIN","WORKER"] },
   { name: "Inventory",          href: "/inventory",       icon: PackageSearch,     section: "operations", roles: ["ADMIN","WORKER","CUSTOMER"] },
   { name: "Cycle Count",        href: "/cycle-count",     icon: ClipboardList,     section: "operations", roles: ["ADMIN","WORKER","CUSTOMER"] },
   { name: "Reports",            href: "/reports",         icon: FileBarChart,      section: "operations", roles: ["ADMIN","WORKER","CUSTOMER"] },
@@ -93,7 +93,7 @@ export default function Sidebar() {
       </div>
 
       {/* Worker Switcher — Admin only */}
-      {isAdmin && <WorkerSwitcher />}
+      {(isAdmin || isCustomer) && <WorkerSwitcher />}
 
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: "auto", padding: "10px 10px 12px" }}>

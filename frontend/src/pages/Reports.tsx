@@ -5,7 +5,7 @@ import {
   ArrowDownToLine, ArrowUpFromLine, Package, ClipboardList,
   AlertTriangle, XCircle, Search, FileText, MonitorPlay, Loader
 } from 'lucide-react';
-import { useAuthStore } from '../store/authStore';
+import { useAuthStore, whQuery } from '../store/authStore';
 
 const API = 'http://localhost:5001/api';
 
@@ -772,8 +772,8 @@ export default function Reports() {
       const params = new URLSearchParams();
       if (dateFrom) params.set('from', dateFrom);
       if (dateTo)   params.set('to', dateTo);
-      const wc = selectedWorker?.warehouseCode;
-      if (wc) params.set('warehouseCode', wc);
+      if (selectedWorker?.warehouseCodes?.length) params.set('warehouseCodes', selectedWorker.warehouseCodes.join(','));
+      else if (selectedWorker?.warehouseCode) params.set('warehouseCode', selectedWorker.warehouseCode);
       const url = `${API}${cfg.endpoint}${params.toString() ? '?'+params : ''}`;
       const res  = await fetch(url);
       const json = await res.json();
@@ -808,12 +808,12 @@ export default function Reports() {
       const monthName = new Date(pptYear, pptMonth-1,1).toLocaleString('en-IN',{month:'long'});
 
       setPptStatus('Fetching data…');
-      const wcSuffix = selectedWorker?.warehouseCode ? `&warehouseCode=${selectedWorker.warehouseCode}` : '';
+      const wcSuffix = whQuery(selectedWorker, '&');
       const [j1,j2,j3,j4,j5] = await Promise.all([
         fetch(`${API}/inward?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
         fetch(`${API}/outward?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
-        fetch(`${API}/inventory${selectedWorker?.warehouseCode ? '?warehouseCode='+selectedWorker.warehouseCode : ''}`).then(r=>r.json()),
-        fetch(`${API}/cycle-count/records?from=${mFrom}&to=${mTo}`).then(r=>r.json()),
+        fetch(`${API}/inventory${whQuery(selectedWorker)}`).then(r=>r.json()),
+        fetch(`${API}/cycle-count/records?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
         fetch(`${API}/inward/discrepancies?from=${mFrom}&to=${mTo}${wcSuffix}`).then(r=>r.json()),
       ]);
       const inwardRows:any[]    = Array.isArray(j1) ? j1 : [];

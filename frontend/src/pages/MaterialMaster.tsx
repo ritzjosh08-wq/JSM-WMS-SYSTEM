@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAuthStore } from '../store/authStore';
+import { useAuthStore, whQuery } from '../store/authStore';
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -198,8 +198,7 @@ export default function MaterialMaster() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const wc = selectedWorker?.warehouseCode;
-      const wcParam = wc ? `?warehouseCode=${wc}` : '';
+      const wcParam = whQuery(selectedWorker);
       const [inv, inw, out] = await Promise.all([
         fetch(`${API}/inventory${wcParam}`).then(r => r.json()),
         fetch(`${API}/inward${wcParam}`).then(r => r.json()),

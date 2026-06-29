@@ -16,7 +16,7 @@ function getWorkerUsers() {
   try { if (fs.existsSync(USERS_FILE)) dynamic = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8')); } catch {}
   return [...BASE, ...dynamic]
     .filter((u: any) => u.role === 'WORKER')
-    .map((u: any) => ({ username: u.username, name: u.name, location: u.location, warehouseCode: (u.warehouseCode || null) as string | null }));
+    .map((u: any) => ({ username: u.username, name: u.name, location: u.location, warehouseCode: (u.warehouseCode || null) as string | null, task: (u.task || null) as string | null }));
 }
 
 // ── Core stats for one warehouse (warehouseId undefined = all) ────────────────
@@ -112,9 +112,52 @@ async function getStatsForWarehouse(warehouseId?: string, warehouseCode?: string
 }
 
 // ── GET / — main dashboard (optional ?warehouseCode=X filter) ─────────────────
+function mergeStats(list: any[]) {
+  const sumKeys = ['todaysInward','todaysOutward','inventoryRM','inventoryFG','inventoryRMPallets','inventoryFGPallets','totalPallets','discrepancyCount'];
+  const out: any = {};
+  for (const k of sumKeys) out[k] = list.reduce((s, x) => s + (x[k] || 0), 0);
+  const mergeBy = (arr: any[], key: string, val: string) => {
+    const m = new Map<string, number>();
+    for (const x of arr) m.set(x[key], (m.get(x[key]) || 0) + (x[val] || 0));
+    return [...m.entries()].map(([k, v]) => ({ [key]: k, [val]: v })).sort((a, b) => (b as any)[val] - (a as any)[val]);
+  };
+  out.stockLocations = mergeBy(list.flatMap(x => x.stockLocations || []), 'name', 'pallets');
+  out.rmByType = mergeBy(list.flatMap(x => x.rmByType || []), 'type', 'pallets');
+  out.discrepancyByCategory = mergeBy(list.flatMap(x => x.discrepancyByCategory || []), 'category', 'count');
+  out.recentInwards = list.flatMap(x => x.recentInwards || [])
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 6);
+  out.binStats = Object.assign({}, ...list.map(x => x.binStats || {}));
+  return out;
+}
+
 router.get('/', async (req, res) => {
   try {
     const wc = (req.query.warehouseCode as string | undefined)?.trim().toUpperCase();
+    const warehouseCodesRaw = req.query.warehouseCodes as string | undefined;
+    const codeList = warehouseCodesRaw
+      ? warehouseCodesRaw.split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
+      : [];
+    if (codeList.length) {
+      const whs = await prisma.warehouse.findMany({ where: { code: { in: codeList } } });
+      const perWh = await Promise.all(whs.map(w => getStatsForWarehouse(w.id, w.code)));
+      const merged = mergeStats(perWh);
+      let pending = 0;
+      try {
+        const _n = new Date();
+        const today = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
+        const ids = whs.map(w => w.id);
+        if (ids.length) {
+          const rows = await prisma.$queryRawUnsafe<[{count: any}]>(
+            `SELECT COUNT(*) as count FROM DailyCycleSession s JOIN WeeklyCycleTask t ON s.taskId = t.id
+             WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s.scheduledDate <= ?
+               AND t.status = 'ACTIVE' AND t.warehouseId IN (${ids.map(() => '?').join(',')})`,
+            today, ...ids);
+          pending = Number(rows[0]?.count ?? 0);
+        }
+      } catch {}
+      return res.json({ ...merged, pendingCycleCounts: pending });
+    }
+
     let warehouseId: string | undefined;
     if (wc) {
       const wh = await prisma.warehouse.findFirst({ where: { code: wc } });
@@ -169,9 +212,11 @@ router.get('/', async (req, res) => {
 });
 
 // ── GET /all-workers — per-worker summary cards for Admin overview ─────────────
-router.get('/all-workers', async (_req, res) => {
+router.get('/all-workers', async (req, res) => {
   try {
-    const workers = getWorkerUsers();
+    const locFilter = (req.query.location as string | undefined)?.trim().toLowerCase();
+    let workers = getWorkerUsers();
+    if (locFilter) workers = workers.filter(w => (w.location || '').toLowerCase() === locFilter);
     const results = await Promise.all(
       workers.map(async (w) => {
         if (!w.warehouseCode) return { ...w, warehouseId: null, warehouseName: null, stats: null };
