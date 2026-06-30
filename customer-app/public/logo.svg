@@ -1,0 +1,10 @@
+<svg viewBox="0 0 620 112" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JSM Logistics Pvt Ltd">
+  <!-- JVS brush monogram -->
+  <text x="2" y="84" font-family="'Brush Script MT','Segoe Script','Lucida Handwriting',cursive" font-size="96" font-style="italic" font-weight="700">
+    <tspan fill="#1C9FE0">J</tspan><tspan fill="#1C9FE0" dx="-10">V</tspan><tspan fill="#E8352A" dx="-8">S</tspan>
+  </text>
+  <!-- Wordmark -->
+  <text x="178" y="72" font-family="Arial,'Helvetica Neue',sans-serif" font-size="40" font-weight="800" letter-spacing="1.5" fill="#1C9FE0">JSM LOGISTICS PVT LTD</text>
+  <!-- red check tick over the I in LOGISTICS -->
+  <path d="M356 30 L368 44 L392 14" fill="none" stroke="#E8352A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

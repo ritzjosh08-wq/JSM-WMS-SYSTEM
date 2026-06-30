@@ -1,75 +1,91 @@
 import type { ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { C } from '../ui';
+import { C, IconDashboard, IconInventory, IconCycle, IconMaterials, IconLogout } from '../ui';
 import InstallButton from './InstallButton';
 import WorkerDropdown from './WorkerDropdown';
 
 const NAV = [
-  { to: '/', label: 'Dashboard', end: true },
-  { to: '/inventory', label: 'Inventory' },
-  { to: '/cycle-count', label: 'Cycle Count' },
-  { to: '/materials', label: 'Material Master' },
+  { to: '/', label: 'Dashboard', end: true, Icon: IconDashboard },
+  { to: '/inventory', label: 'Inventory', Icon: IconInventory },
+  { to: '/cycle-count', label: 'Cycle Count', Icon: IconCycle },
+  { to: '/materials', label: 'Material Master', Icon: IconMaterials },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
   const user = useAuthStore(s => s.user);
   const allowedCodes = useAuthStore(s => s.allowedCodes);
+  const selWorker = useAuthStore(s => s.selectedWorkerCode);
+  const team = useAuthStore(s => s.team);
   const logout = useAuthStore(s => s.logout);
   const navigate = useNavigate();
-
   const doLogout = () => { logout(); navigate('/login'); };
 
+  const initials = (user?.name || 'JSM').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  const scopeLabel = selWorker
+    ? (team.find(w => w.warehouseCode === selWorker)?.name || selWorker)
+    : (allowedCodes.length ? `All areas · ${allowedCodes.join(', ')}` : (user?.location || 'All areas'));
+
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: C.bg }}>
-      <header className="app-header" style={{
-        background: '#fff', borderBottom: `1px solid ${C.line}`,
-        padding: '10px 16px', minHeight: 56, display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 10, gap: 10,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <img src="/jsm-logo.svg" alt="JSM" style={{ height: 28 }} />
-          <div className="hide-mobile" style={{ borderLeft: `1px solid ${C.line}`, paddingLeft: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, lineHeight: 1.1 }}>Customer Portal</div>
-            <div style={{ fontSize: 11, color: C.faint }}>Read-only view</div>
-          </div>
+    <div className="shell">
+      {/* Sidebar (desktop) */}
+      <aside className="sidebar">
+        <div className="sidebar-brand" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+          <img src="/logo.svg" alt="JSM Logistics Pvt Ltd" style={{ width: 188, maxWidth: '100%', display: 'block' }} />
+          <div className="sub" style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.16em', textTransform: 'uppercase', color: '#64748b' }}>Customer Portal · Read-only</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <WorkerDropdown />
-          <InstallButton variant="chip" />
-          <div className="hide-mobile" style={{ textAlign: 'right', minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>{user?.name}</div>
-            <div style={{ fontSize: 11, color: C.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
-              {allowedCodes.length ? allowedCodes.join(', ') : (user?.location || 'All locations')}
+        <nav className="nav">
+          <div className="nav-label">Menu</div>
+          {NAV.map(({ to, label, end, Icon }) => (
+            <NavLink key={to} to={to} end={end} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+              <Icon size={18} /> {label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="sidebar-foot">
+          <div className="user-chip">
+            <div className="avatar">{initials}</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.name}</div>
+              <div style={{ fontSize: 10.5, color: '#64748b' }}>{user?.location || 'Customer'}</div>
             </div>
           </div>
-          <button onClick={doLogout} style={{
-            background: '#f8fafc', border: `1px solid ${C.line}`, color: C.sub,
-            borderRadius: 8, padding: '7px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-          }}>Sign out</button>
+          <button onClick={doLogout} className="btn btn-ghost" style={{ width: '100%', marginTop: 8, justifyContent: 'center', background: 'rgba(255,255,255,.04)', color: '#cbd5e1', border: '1px solid rgba(255,255,255,.1)' }}>
+            <IconLogout size={16} /> Sign out
+          </button>
         </div>
-      </header>
+      </aside>
 
-      <nav className="app-nav" style={{ background: '#fff', borderBottom: `1px solid ${C.line}`, padding: '0 12px', display: 'flex', gap: 2, position: 'sticky', top: 56, zIndex: 9 }}>
-        {NAV.map(n => (
-          <NavLink key={n.to} to={n.to} end={n.end}
-            style={({ isActive }) => ({
-              padding: '14px 14px', fontSize: 13, fontWeight: 600, textDecoration: 'none',
-              color: isActive ? C.blue : C.sub, whiteSpace: 'nowrap',
-              borderBottom: isActive ? `2px solid ${C.blue}` : '2px solid transparent',
-            })}>
-            {n.label}
-          </NavLink>
-        ))}
-      </nav>
+      {/* Main */}
+      <div className="main">
+        <header className="topbar">
+          {/* Mobile brand */}
+          <div className="only-mobile" style={{ alignItems: 'center', gap: 9 }}>
+            <img src="/logo.svg" alt="JSM Logistics" style={{ height: 24 }} />
+          </div>
+          {/* Scope context (desktop) */}
+          <div className="hide-mobile" style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub, fontSize: 13, fontWeight: 600 }}>
+            <IconInventory size={16} style={{ color: C.faint }} />
+            <span style={{ color: C.faint }}>Viewing</span>
+            <span style={{ color: C.ink, fontWeight: 700 }}>{scopeLabel}</span>
+          </div>
+          <div style={{ flex: 1 }} />
+          <WorkerDropdown />
+          <InstallButton variant="chip" />
+          <button onClick={doLogout} className="btn btn-ghost only-mobile" title="Sign out" style={{ padding: '8px 10px' }}><IconLogout size={16} /></button>
+        </header>
 
-      <main className="app-main" style={{ flex: 1, padding: 24, maxWidth: 1400, width: '100%', margin: '0 auto' }}>
-        {children}
-      </main>
+        <main className="content fade-up">{children}</main>
 
-      <footer style={{ textAlign: 'center', padding: '16px', fontSize: 11, color: C.faint }}>
-        JSM Logistics - Customer Portal
-      </footer>
+        {/* Bottom nav (mobile) */}
+        <nav className="bottomnav">
+          {NAV.map(({ to, label, end, Icon }) => (
+            <NavLink key={to} to={to} end={end} className={({ isActive }) => (isActive ? 'active' : '')}>
+              <Icon size={20} /> {label.split(' ')[0]}
+            </NavLink>
+          ))}
+        </nav>
+      </div>
     </div>
   );
 }

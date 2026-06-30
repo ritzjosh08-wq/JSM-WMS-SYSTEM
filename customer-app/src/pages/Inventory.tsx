@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchInventoryForCodes, parseCF, type InventoryRow, type Warehouse } from '../api';
 import { useAuthStore } from '../store/authStore';
-import { Card, Spinner, C } from '../ui';
+import { Card, PageHeader, Spinner, C, IconRefresh } from '../ui';
 
 // Mirrors the WMS software Inventory columns (read-only for customers).
 const th: React.CSSProperties = {
@@ -124,21 +124,11 @@ export default function Inventory() {
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h1 className="page-title" style={{ fontSize: 22, fontWeight: 800, color: C.ink, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span aria-hidden>📦</span>{scopeName}'s Inventory
-          </h1>
-          <p style={{ fontSize: 12, color: C.faint, margin: '4px 0 0' }}>
-            Warehouse: {scopeWh} · Live stock{updated ? ` · Updated ${updated.toLocaleTimeString()}` : ''}
-          </p>
-        </div>
-        <button onClick={load} style={{
-          display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: C.blue,
-          border: `1px solid ${C.blue}`, borderRadius: 9, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-        }}>↻ Refresh</button>
-      </div>
+      <PageHeader
+        title={`${scopeName}'s Inventory`}
+        subtitle={`Warehouse: ${scopeWh} · Live stock${updated ? ` · Updated ${updated.toLocaleTimeString()}` : ''}`}
+        right={<button onClick={load} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>}
+      />
 
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
