@@ -50,7 +50,7 @@ const EMPTY_ENTRY: Omit<ManualEntry, "id"> = {
   category: "RM", stockLocation: "",
   truckInTime: "", unloadStartTime: "", unloadEndTime: "", truckOutTime: "",
   tat: "", tatRemarks: "",
-  materialCode: "", description: "", huUnit: "Nos", materialType: "",
+  materialCode: "", description: "", huUnit: "", materialType: "",
   actualHuUnit: "", actualDescription: "", binLocation: "",
   invoiceQtyInPallet: 0, invoiceQtyInNos: 0, invoiceNetWeight: 0,
   receivedQtyInPallets: 0, receivedQtyInNos: 0, receivedQtyInKgs: 0,
@@ -984,13 +984,18 @@ export default function InwardClient() {
   const askStaging = (count: number): Promise<boolean> =>
     new Promise(resolve => setStagingPrompt({ count, resolve }));
 
-  // ── Duplicate HU detection — computed from current entries, updates automatically
+  // ── Duplicate HU detection — only fires when BOTH materialCode AND huUnit are the same.
+  // Same material code across multiple rows is allowed (multiple shipments).
+  // Same specific HU unit for the same material = true duplicate.
   const duplicateHUs = useMemo(() => {
     const counts = new Map<string, number>();
     for (const e of entries) {
-      if (isSpecificHU(e.huUnit)) counts.set(e.huUnit!, (counts.get(e.huUnit!) || 0) + 1);
+      if (isSpecificHU(e.huUnit)) {
+        const key = `${(e.materialCode || '').trim()}|${(e.huUnit || '').trim()}`;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
     }
-    return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([hu]) => hu));
+    return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([key]) => key));
   }, [entries]);
 
   // ── Counts
@@ -1004,10 +1009,12 @@ export default function InwardClient() {
     // Warn (but allow) if HU unit is shared — rows will be highlighted in the table
     if (isSpecificHU(entry.huUnit)) {
       const conflict = entries.find(
-        (e) => e.id !== entry.id && isSpecificHU(e.huUnit) && e.huUnit.trim() === entry.huUnit.trim()
+        (e) => e.id !== entry.id && isSpecificHU(e.huUnit) &&
+          (e.materialCode || '').trim() === (entry.materialCode || '').trim() &&
+          e.huUnit.trim() === entry.huUnit.trim()
       );
       if (conflict) {
-        setDupeError(`⚠ HU Unit "${entry.huUnit}" is shared with material ${conflict.materialCode || conflict.description}. Both rows are flagged for discrepancy review.`);
+        setDupeError(`⚠ HU Unit "${entry.huUnit}" is already used for material ${entry.materialCode}. Same material + same HU unit cannot be committed twice.`);
       }
     }
     if (editingEntry) {
@@ -1032,7 +1039,7 @@ export default function InwardClient() {
         id: "",
         entryStatus: "PENDING",
         // Clear line-item specific fields but keep header fields (truck, source, etc.)
-        materialCode: "", description: "", materialType: "", huUnit: "Nos", binLocation: "",
+        materialCode: "", description: "", materialType: "", huUnit: "", binLocation: "",
         invoiceQtyInPallet: 0, invoiceQtyInNos: 0, invoiceNetWeight: 0,
         receivedQtyInPallets: 0, receivedQtyInNos: 0, receivedQtyInKgs: 0,
         receivedNetWeight: 0, numberOfBoxes: 0, boxPerKg: 0,
@@ -1142,7 +1149,9 @@ export default function InwardClient() {
                               : toNum(rawShortKg);
 
         const binVal    = toStr(col("BIN"));
-        const huUnitVal = toStr(col("HU Unit")) || binVal || "Nos";
+        // HU Unit: only use the explicit "HU Unit" column. BIN is a storage location, not a handling unit.
+        // Leave blank if column is absent — do NOT default to "Nos" or binVal.
+        const huUnitVal = toStr(col("HU Unit"));
 
         const uploadedDiscrepant =
           (shortInPallet    || 0) !== 0 ||
@@ -1200,17 +1209,20 @@ export default function InwardClient() {
 
       // Detect rows with actual numerical discrepancies (shortInPallet or shortExcessInKg ≠ 0)
       const discrepantRows = mapped.filter(e => e.shortInPallet !== 0 || e.shortExcessInKg !== 0);
-      // Detect shared HU units (for visual flagging in the table)
+      // Detect duplicate (materialCode + huUnit) combos for visual flagging
       const huCounts = new Map<string, number>();
       for (const entry of mapped) {
-        if (isSpecificHU(entry.huUnit)) huCounts.set(entry.huUnit, (huCounts.get(entry.huUnit) || 0) + 1);
+        if (isSpecificHU(entry.huUnit)) {
+          const key = `${(entry.materialCode||'').trim()}|${(entry.huUnit||'').trim()}`;
+          huCounts.set(key, (huCounts.get(key) || 0) + 1);
+        }
       }
-      const sharedHUs = [...huCounts.entries()].filter(([, c]) => c > 1).map(([hu]) => hu);
-      // Only show a notification when there are REAL discrepancies, not just shared HU units
+      const sharedHUs = [...huCounts.entries()].filter(([, c]) => c > 1).map(([key]) => key);
+      // Only notify for real quantity discrepancies, not just same material code
       if (discrepantRows.length > 0) {
         setSmartError(`⚠ ${discrepantRows.length} row(s) have quantity discrepancies — review and mark discrepancy before committing.`);
       } else if (sharedHUs.length > 0) {
-        setSmartError(`⚠ ${sharedHUs.length} HU unit(s) shared across multiple rows — highlighted for review.`);
+        setSmartError(`⚠ ${sharedHUs.length} material+HU combination(s) appear multiple times — highlighted for review.`);
       }
 
       // Accept all rows — duplicates are flagged visually, not skipped
@@ -1229,11 +1241,11 @@ export default function InwardClient() {
     const toCommit = entries.filter((e) => e.entryStatus === "APPROVED" || e.entryStatus === "DISCREPANCY");
     if (!toCommit.length) { setSaveError("No approved or discrepancy entries to commit."); return; }
 
-    // Block commit if any entry being committed has a duplicate HU unit
-    const dupeInCommit = toCommit.filter((e) => isSpecificHU(e.huUnit) && duplicateHUs.has(e.huUnit));
+    // Block commit if any entry has a duplicate (materialCode + huUnit) combination
+    const dupeInCommit = toCommit.filter((e) => isSpecificHU(e.huUnit) && duplicateHUs.has(`${(e.materialCode||'').trim()}|${(e.huUnit||'').trim()}`));
     if (dupeInCommit.length > 0) {
-      const dupeList = [...new Set(dupeInCommit.map((e) => e.huUnit))].join(", ");
-      setSaveError(`Duplicate HU Unit detected: ${dupeList}. Resolve duplicate HU units before committing — these entries cannot be added to inventory.`);
+      const dupeList = [...new Set(dupeInCommit.map((e) => `${e.materialCode} / ${e.huUnit}`))].join(", ");
+      setSaveError(`Duplicate HU Unit detected for same material: ${dupeList}. Resolve before committing — the same physical HU of the same material cannot be added twice.`);
       return;
     }
 
@@ -1511,7 +1523,7 @@ export default function InwardClient() {
                 onDelete={() => setEntries(prev => prev.filter(e => e.id !== entry.id))}
                 onStatusChange={(s) => handleStatusChange(entry.id, s)}
                 onUpdateField={(f, v) => handleUpdateField(entry.id, f, v)}
-                isDupeHU={isSpecificHU(entry.huUnit) && duplicateHUs.has(entry.huUnit)}
+                isDupeHU={isSpecificHU(entry.huUnit) && duplicateHUs.has(`${(entry.materialCode||'').trim()}|${(entry.huUnit||'').trim()}`)}
                 isViewer={isViewer}
               />
             ))}
