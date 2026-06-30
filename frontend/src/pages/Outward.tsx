@@ -7,7 +7,7 @@ import {
   ArrowUpFromLine, XCircle, Check, FileSpreadsheet
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { useAuthStore } from "../store/authStore";
+import { useAuthStore, whQuery } from "../store/authStore";
 
 const API = "http://localhost:5001/api";
 
@@ -393,8 +393,7 @@ export default function OutwardClient() {
     }
     updateLine(line.id, { matchStatus: "LOADING" });
     try {
-      const wc = selectedWorker?.warehouseCode;
-      const wcParam = wc ? `&warehouseCode=${wc}` : '';
+      const wcParam = whQuery(selectedWorker, '&');
       const res = await fetch(`${API}/outward/fifo?materialCode=${encodeURIComponent(line.materialCode)}&requiredQty=${line.requiredQty}${wcParam}`);
       const data = await res.json();
       const recs: FifoRec[] = data.recommendations || [];

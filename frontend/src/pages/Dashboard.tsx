@@ -5,7 +5,7 @@ import {
   ArrowDownToLine, ArrowUpFromLine, Package, ClipboardList,
   AlertTriangle, Activity, TrendingUp, Layers, Users
 } from "lucide-react";
-import { useAuthStore } from '../store/authStore';
+import { useAuthStore, whQuery } from '../store/authStore';
 
 const API = 'http://localhost:5001/api';
 
@@ -27,8 +27,7 @@ export default function Dashboard() {
   useEffect(() => {
     setLoading(true);
     setError('');
-    const wc  = selectedWorker?.warehouseCode;
-    const url = wc ? `${API}/dashboard?warehouseCode=${wc}` : `${API}/dashboard`;
+    const url = `${API}/dashboard${whQuery(selectedWorker)}`;
     fetch(url)
       .then(res => res.json())
       .then(json => {

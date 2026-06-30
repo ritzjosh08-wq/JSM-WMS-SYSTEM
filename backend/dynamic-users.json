@@ -1,18 +1,40 @@
 [
   {
-    "username": "salemmab",
-    "password": "salem123",
-    "name": "Salem Worker",
-    "role": "WORKER",
-    "location": "Salem MAB",
-    "dynamic": true
-  },
-  {
-    "username": "salemmabcust",
+    "username": "salemcust",
     "password": "salem123",
     "name": "Salem MAB",
     "role": "CUSTOMER",
     "location": "Salem MAB",
+    "dynamic": true
+  },
+  {
+    "username": "salemw1",
+    "password": "salem123",
+    "name": "Salem Worker 1",
+    "role": "WORKER",
+    "location": "Salem MAB",
+    "warehouseCode": "SALEM1",
+    "task": "Inward & Receiving",
+    "dynamic": true
+  },
+  {
+    "username": "salemw2",
+    "password": "salem123",
+    "name": "Salem Worker 2",
+    "role": "WORKER",
+    "location": "Salem MAB",
+    "warehouseCode": "SALEM2",
+    "task": "Outward & Dispatch",
+    "dynamic": true
+  },
+  {
+    "username": "salemw3",
+    "password": "salem123",
+    "name": "Salem Worker 3",
+    "role": "WORKER",
+    "location": "Salem MAB",
+    "warehouseCode": "SALEM3",
+    "task": "Cycle Count & Audit",
     "dynamic": true
   }
 ]

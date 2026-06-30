@@ -45,3 +45,4 @@ desktop.ini
 # ── Stray compiled files ──────────────────────────────────────────────────────
 *.js.map
 OneDrive_*.js
+backend/prisma/dev.db

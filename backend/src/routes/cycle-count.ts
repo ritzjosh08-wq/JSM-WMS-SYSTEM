@@ -377,16 +377,20 @@ router.post('/session/:id/complete', async (req, res) => {
 // ── GET /records — completed weekly cycle count summaries (for Reports tab) ───
 router.get('/records', async (req, res) => {
   try {
-    const { from, to, warehouseCode } = req.query;
+    const { from, to, warehouseCode, warehouseCodes } = req.query;
 
-    // Build WHERE clause — filter by weekStart date range and/or warehouse
     let where = `WHERE t.status = 'COMPLETED'`;
     const params: any[] = [];
     if (from) { where += ` AND t.weekStart >= ?`; params.push(String(from)); }
     if (to)   { where += ` AND t.weekStart <= ?`; params.push(String(to)); }
-    if (warehouseCode) {
-      const wh = await prisma.warehouse.findFirst({ where: { code: String(warehouseCode).toUpperCase() } });
-      if (wh) { where += ` AND t.warehouseId = ?`; params.push(wh.id); }
+    const codeList = warehouseCodes
+      ? String(warehouseCodes).split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
+      : (warehouseCode ? [String(warehouseCode).trim().toUpperCase()] : []);
+    if (codeList.length) {
+      const whs = await prisma.warehouse.findMany({ where: { code: { in: codeList } }, select: { id: true } });
+      const ids = whs.map(w => w.id);
+      if (ids.length) { where += ` AND t.warehouseId IN (${ids.map(() => '?').join(',')})`; params.push(...ids); }
+      else { where += ` AND 1 = 0`; }
     }
 
     const tasks = await prisma.$queryRawUnsafe<any[]>(

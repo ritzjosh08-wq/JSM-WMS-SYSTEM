@@ -21,6 +21,11 @@ function AdminRoute({ element }: { element: React.ReactElement }) {
   return role === 'ADMIN' ? element : <Navigate to="/" replace />;
 }
 
+function StaffRoute({ element }: { element: React.ReactElement }) {
+  const role = useAuthStore(s => s.user?.role);
+  return role === 'CUSTOMER' ? <Navigate to="/" replace /> : element;
+}
+
 export default function App() {
   const user = useAuthStore(s => s.user);
 
@@ -47,8 +52,8 @@ export default function App() {
           }}>
             <Routes>
               <Route path="/"               element={<Dashboard />} />
-              <Route path="/inward"         element={<Inward />} />
-              <Route path="/outward"        element={<Outward />} />
+              <Route path="/inward"         element={<StaffRoute element={<Inward />} />} />
+              <Route path="/outward"        element={<StaffRoute element={<Outward />} />} />
               <Route path="/smart-ingestion" element={<AdminRoute element={<SmartIngestion />} />} />
               <Route path="/cycle-count"    element={<CycleCount />} />
               <Route path="/inventory"      element={<Inventory />} />
