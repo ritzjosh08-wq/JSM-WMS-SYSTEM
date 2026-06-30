@@ -136,6 +136,27 @@ router.post('/commit', async (req, res) => {
     for (const [invoiceKey, rows] of groups) {
       const first = rows[0];
 
+      // Resolve the group-level warehouse from the first row's stockLocation.
+      // Auto-create the warehouse if the code doesn't exist yet.
+      let groupWarehouse = defaultWarehouse;
+      const groupStockCode = (first.stockLocation || '').trim().toUpperCase();
+      if (groupStockCode) {
+        let gwh = await prisma.warehouse.findFirst({ where: { code: groupStockCode } });
+        if (!gwh) {
+          gwh = await prisma.warehouse.create({
+            data: {
+              code: groupStockCode,
+              name: groupStockCode,
+              storageType: 'MIXED',
+              totalCapacity: 100000,
+              isActive: true,
+            },
+          });
+          console.log(`Auto-created warehouse (group): ${groupStockCode}`);
+        }
+        groupWarehouse = gwh;
+      }
+
       // Parse DD-MM-YYYY or YYYY-MM-DD or ISO date strings robustly using LOCAL time (no UTC shift)
       const parseInwardDate = (dateStr: string): Date => {
         if (!dateStr) return new Date();
@@ -193,9 +214,9 @@ router.post('/commit', async (req, res) => {
               materialCode: row.materialCode || "UNKNOWN",
               quantity: row.receivedQtyInNos || row.invoiceQtyInNos || row.receivedNetWeight || 0,
               batchNumber: row.invoiceNumber || `BATCH-${Date.now()}`,
-              warehouseId: defaultWarehouse.id,
+              warehouseId: groupWarehouse.id,
               lineItemStatus: row.status,
-              huUnit: row.huUnit || null,
+              huUnit: row.huUnit || null,   // null/blank if not provided in sheet
               description: row.description || null,
               binLocation: row.binLocation || null,
               remarks: row.remarks || null,
@@ -238,8 +259,24 @@ router.post('/commit', async (req, res) => {
               code: row.materialCode,
               description: row.description || row.materialCode,
               materialType: row.materialType || row.category || "RM",
-              huUnit: row.huUnit || "Nos",
+              huUnit: row.huUnit || "",          // blank if not provided in sheet
               category: row.category || "RM",
+              defaultStorageType: row.binLocation || row.stockLocation || null,
+            },
+          });
+        } else {
+          // Update material master with any new info from this inward — keeps Material Master current
+          await prisma.material.update({
+            where: { id: material.id },
+            data: {
+              ...(row.description  ? { description:  row.description }  : {}),
+              ...(row.materialType ? { materialType: row.materialType } : {}),
+              ...(row.category     ? { category:     row.category }     : {}),
+              ...(row.huUnit       ? { huUnit:       row.huUnit }       : {}),
+              // Update default storage location so Material Master always shows latest location
+              ...(row.binLocation || row.stockLocation
+                ? { defaultStorageType: row.binLocation || row.stockLocation }
+                : {}),
             },
           });
         }
@@ -298,41 +335,66 @@ router.post('/commit', async (req, res) => {
           discrepancy:    hasDiscrepancy,
         });
 
-        // Create new inventory batch (no merging — same material+HU unit is an error above)
-        const existing = await prisma.inventoryBatch.findFirst({
-          where: { materialId: material.id, batchNumber: batchKey, warehouseId: defaultWarehouse.id },
-        });
-
-        // Resolve binLocation code → FloorLocation id, scoped to the correct warehouse.
-        // stockLocation on the row (e.g. "CM35" or "FG05") tells us which warehouse to
-        // look in so that identical bin codes in different warehouses never collide.
+        // Resolve binLocation → FloorLocation id, auto-creating if new.
+        // Must happen BEFORE the existing-batch lookup so resolvedWarehouseId is set.
+        // Any new bin/location code is auto-recorded so all workers' locations land in warehouse map.
         let resolvedFloorLocationId: string | null = null;
-        let resolvedWarehouseId: string = defaultWarehouse.id;
+        // Start from groupWarehouse (already resolved/auto-created for this invoice group)
+        let resolvedWarehouseId: string = groupWarehouse.id;
+
+        // Allow per-row override: if the row has its own stockLocation different from the group's,
+        // resolve/auto-create that warehouse too.
+        const rowStockCode = (row.stockLocation || '').trim().toUpperCase();
+        let targetWarehouse = groupWarehouse;
+        if (rowStockCode && rowStockCode !== groupStockCode) {
+          let wh = await prisma.warehouse.findFirst({ where: { code: rowStockCode } });
+          if (!wh) {
+            wh = await prisma.warehouse.create({
+              data: {
+                code: rowStockCode,
+                name: rowStockCode,
+                storageType: 'MIXED',
+                totalCapacity: 100000,
+                isActive: true,
+              },
+            });
+            console.log(`Auto-created warehouse (row): ${rowStockCode}`);
+          }
+          targetWarehouse = wh;
+          resolvedWarehouseId = wh.id;
+        }
+
         if (row.binLocation && row.binLocation.trim()) {
           const binCode = row.binLocation.trim();
 
-          // Determine target warehouse from the row's stockLocation field
-          const stockLocCode = (row.stockLocation || first.stockLocation || '').trim().toUpperCase();
-
-          // Build the where clause — prefer warehouse-scoped lookup
-          let targetWarehouseId: string | undefined;
-          if (stockLocCode) {
-            const targetWh = await prisma.warehouse.findFirst({ where: { code: stockLocCode } });
-            if (targetWh) targetWarehouseId = targetWh.id;
-          }
-
-          const floorLoc = await prisma.floorLocation.findFirst({
-            where: {
-              code: binCode,
-              isActive: true,
-              ...(targetWarehouseId ? { warehouseId: targetWarehouseId } : {}),
-            },
+          // Find existing FloorLocation for this warehouse
+          let floorLoc = await prisma.floorLocation.findFirst({
+            where: { code: binCode, warehouseId: targetWarehouse.id },
           });
-          if (floorLoc) {
-            resolvedFloorLocationId = floorLoc.id;
-            resolvedWarehouseId = floorLoc.warehouseId;
+
+          // Auto-create if not found — records any new location entered by any user/worker
+          if (!floorLoc) {
+            const zone = (row.category || row.materialType || 'GENERAL').toUpperCase().slice(0, 20);
+            floorLoc = await prisma.floorLocation.create({
+              data: {
+                warehouseId: targetWarehouse.id,
+                zone,
+                code: binCode,
+                capacity: 10000,
+                isActive: true,
+              },
+            });
+            console.log(`Auto-created floor location: ${binCode} in ${targetWarehouse.code}`);
           }
+
+          resolvedFloorLocationId = floorLoc.id;
+          resolvedWarehouseId = floorLoc.warehouseId;
         }
+
+        // Find existing batch for this material+invoice in the resolved warehouse
+        const existing = await prisma.inventoryBatch.findFirst({
+          where: { materialId: material.id, batchNumber: batchKey, warehouseId: resolvedWarehouseId },
+        });
 
         if (existing) {
           await prisma.inventoryBatch.update({
