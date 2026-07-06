@@ -979,6 +979,7 @@ export default function InwardClient() {
   const [smartImported, setSmartImported] = useState(0);
   const [dupeError, setDupeError] = useState<string | null>(null);
   const [stagingPrompt, setStagingPrompt] = useState<{ count: number; resolve: (yes: boolean) => void } | null>(null);
+  const [filterStatus, setFilterStatus] = useState<string | null>(null);
 
   // ── Staging area ask helper — shows modal, returns promise ──────────────
   const askStaging = (count: number): Promise<boolean> =>
@@ -1396,17 +1397,31 @@ export default function InwardClient() {
       {/* ── Stats + Controls */}
       <div className="flex gap-3 items-stretch flex-shrink-0 flex-wrap">
         {[
-          { label: "Total",       val: entries.length, color: "text-gray-700",  bg: "bg-gray-50",   border: "border-gray-200"  },
-          { label: "Pending",     val: pending,        color: "text-amber-700", bg: "bg-amber-50",  border: "border-amber-200" },
-          { label: "Approved",    val: approved,       color: "text-green-700", bg: "bg-green-50",  border: "border-green-200" },
-          { label: "Discrepancy", val: discrepancy,    color: "text-orange-700",bg: "bg-orange-50", border: "border-orange-200"},
-          { label: "Rejected",    val: rejected,       color: "text-red-700",   bg: "bg-red-50",    border: "border-red-200"   },
-        ].map((s) => (
-          <div key={s.label} className={`${s.bg} ${s.border} border rounded-xl px-4 py-2 text-center min-w-[72px]`}>
-            <div className={`text-2xl font-black ${s.color}`}>{s.val}</div>
-            <div className="text-xs text-gray-400 font-semibold uppercase tracking-wide mt-0.5">{s.label}</div>
-          </div>
-        ))}
+          { label: "All",         key: null,             val: entries.length, color: "text-gray-700",   bg: "bg-gray-50",   activeBg: "bg-gray-700",   border: "border-gray-200",   ring: "ring-gray-400"   },
+          { label: "Pending",     key: "PENDING",        val: pending,        color: "text-amber-700",  bg: "bg-amber-50",  activeBg: "bg-amber-600",  border: "border-amber-200",  ring: "ring-amber-400"  },
+          { label: "Approved",    key: "APPROVED",       val: approved,       color: "text-green-700",  bg: "bg-green-50",  activeBg: "bg-green-600",  border: "border-green-200",  ring: "ring-green-400"  },
+          { label: "Discrepancy", key: "DISCREPANCY",    val: discrepancy,    color: "text-orange-700", bg: "bg-orange-50", activeBg: "bg-orange-600", border: "border-orange-200", ring: "ring-orange-400" },
+          { label: "Rejected",    key: "REJECTED",       val: rejected,       color: "text-red-700",    bg: "bg-red-50",    activeBg: "bg-red-600",    border: "border-red-200",    ring: "ring-red-400"    },
+        ].map((s) => {
+          const isActive = filterStatus === s.key;
+          return (
+            <button
+              key={s.label}
+              onClick={() => setFilterStatus(isActive ? null : s.key)}
+              title={isActive ? `Clear filter` : `Show only ${s.label}`}
+              className={`border rounded-xl px-4 py-2 text-center min-w-[76px] transition-all cursor-pointer select-none
+                ${isActive
+                  ? `${s.activeBg} border-transparent text-white ring-2 ${s.ring} ring-offset-1 shadow-md`
+                  : `${s.bg} ${s.border} hover:shadow-sm hover:brightness-95`
+                }`}
+            >
+              <div className={`text-2xl font-black ${isActive ? "text-white" : s.color}`}>{s.val}</div>
+              <div className={`text-xs font-semibold uppercase tracking-wide mt-0.5 ${isActive ? "text-white/80" : "text-gray-400"}`}>
+                {s.label}{isActive ? " ✕" : ""}
+              </div>
+            </button>
+          );
+        })}
         <div className="flex-1" />
         {!isViewer && entries.length > 0 && (
           <>
@@ -1503,32 +1518,55 @@ export default function InwardClient() {
               </>
             )}
           </div>
-        ) : (
-          <>
-            {/* Column headers */}
-            <div className="grid items-center gap-3 px-4 py-2 mb-1"
-              style={{ gridTemplateColumns: "1.5rem 1.5fr 1.8fr 0.7fr 0.7fr 0.9fr auto" }}>
-              {["#", "Material", "Invoice vs Received", "Δ Qty", "Δ Wt", "Status", "Actions"].map((h) => (
-                <div key={h} className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</div>
-              ))}
-            </div>
+        ) : (() => {
+          const visibleEntries = filterStatus
+            ? entries.filter(e => e.entryStatus === filterStatus)
+            : entries;
+          return (
+            <>
+              {/* Active filter banner */}
+              {filterStatus && (
+                <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold">
+                  <span>Showing <strong>{visibleEntries.length}</strong> of <strong>{entries.length}</strong> entries — filtered by <strong>{filterStatus}</strong></span>
+                  <button onClick={() => setFilterStatus(null)} className="ml-auto flex items-center gap-1 text-blue-500 hover:text-blue-700 font-bold">
+                    <X size={12} /> Clear filter
+                  </button>
+                </div>
+              )}
 
-            {/* Entry rows */}
-            {entries.map((entry, idx) => (
-              <EntryRow
-                key={entry.id}
-                entry={entry}
-                index={idx}
-                onEdit={() => { setEditingEntry(entry); setFormOpen(true); }}
-                onDelete={() => setEntries(prev => prev.filter(e => e.id !== entry.id))}
-                onStatusChange={(s) => handleStatusChange(entry.id, s)}
-                onUpdateField={(f, v) => handleUpdateField(entry.id, f, v)}
-                isDupeHU={isSpecificHU(entry.huUnit) && duplicateHUs.has(`${(entry.materialCode||'').trim()}|${(entry.huUnit||'').trim()}`)}
-                isViewer={isViewer}
-              />
-            ))}
-          </>
-        )}
+              {/* Column headers */}
+              <div className="grid items-center gap-3 px-4 py-2 mb-1"
+                style={{ gridTemplateColumns: "1.5rem 1.5fr 1.8fr 0.7fr 0.7fr 0.9fr auto" }}>
+                {["#", "Material", "Invoice vs Received", "Δ Qty", "Δ Wt", "Status", "Actions"].map((h) => (
+                  <div key={h} className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</div>
+                ))}
+              </div>
+
+              {/* Entry rows — only the filtered set */}
+              {visibleEntries.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400">
+                  <ClipboardList size={36} className="opacity-20" />
+                  <div className="text-sm font-semibold">No {filterStatus?.toLowerCase()} entries</div>
+                </div>
+              ) : visibleEntries.map((entry) => {
+                const idx = entries.indexOf(entry);
+                return (
+                  <EntryRow
+                    key={entry.id}
+                    entry={entry}
+                    index={idx}
+                    onEdit={() => { setEditingEntry(entry); setFormOpen(true); }}
+                    onDelete={() => setEntries(prev => prev.filter(e => e.id !== entry.id))}
+                    onStatusChange={(s) => handleStatusChange(entry.id, s)}
+                    onUpdateField={(f, v) => handleUpdateField(entry.id, f, v)}
+                    isDupeHU={isSpecificHU(entry.huUnit) && duplicateHUs.has(`${(entry.materialCode||'').trim()}|${(entry.huUnit||'').trim()}`)}
+                    isViewer={isViewer}
+                  />
+                );
+              })}
+            </>
+          );
+        })()}
       </div>
 
       {/* ── Entry Form Modal */}
