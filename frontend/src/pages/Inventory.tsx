@@ -27,6 +27,13 @@ interface InventoryItem {
     category: string | null;
   } | null;
   warehouse: { id: string; name: string } | null;
+  rack: { id: string; code: string } | null;
+  bin: {
+    id: string;
+    code: string;
+    level: { id: string; code: string; row: { id: string; code: string } | null } | null;
+  } | null;
+  floorLocation: { id: string; zone: string; code: string } | null;
 }
 
 interface EnrichedItem extends InventoryItem {
@@ -36,10 +43,21 @@ interface EnrichedItem extends InventoryItem {
   displayQtyKg: number;
   displayQtyPallet: number;
   binLocation: string;
+  // True Rack/Row/Level/Bin hierarchy when this batch is stored in a real provisioned rack
+  // bin (from item.rack/item.bin, not just the free-text binLocation string). Blank when the
+  // batch is stored in a plain FloorLocation instead.
+  storageKind: "RACK" | "FLOOR" | "UNASSIGNED";
+  rackCode: string;
+  rackRowCode: string;
+  rackLevelCode: string;
+  rackBinCode: string;
+  floorZone: string;
+  floorCode: string;
   stockLocation: string;
   source: string;
   invoiceNo: string;
   materialType: string;
+  materialTypeList: string[];
   inwardDate: string;
   huUnit: string;
   tatRemarks: string;
@@ -762,6 +780,18 @@ export default function InventoryClient() {
     next.has(loc) ? next.delete(loc) : next.add(loc);
     return next;
   });
+  const [expandedRacks, setExpandedRacks] = useState<Set<string>>(new Set());
+  const toggleRack = (rack: string) => setExpandedRacks(prev => {
+    const next = new Set(prev);
+    next.has(rack) ? next.delete(rack) : next.add(rack);
+    return next;
+  });
+  const [expandedFloorZones, setExpandedFloorZones] = useState<Set<string>>(new Set());
+  const toggleFloorZone = (zone: string) => setExpandedFloorZones(prev => {
+    const next = new Set(prev);
+    next.has(zone) ? next.delete(zone) : next.add(zone);
+    return next;
+  });
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -825,10 +855,29 @@ export default function InventoryClient() {
         displayQtyKg:     parseFloat(cf.netWeight)  || 0,
         displayQtyPallet: parseFloat(cf.pallets)    || 0,
         binLocation:  cf.binLocation  || "—",
+        // Real Rack/Row/Level/Bin hierarchy — only present when Inward commit matched the
+        // Excel/manual BIN code against an already-provisioned rack Bin (see inward.ts commit
+        // route). Falls back to FloorLocation, or "UNASSIGNED" if neither is set on the batch.
+        storageKind: item.bin ? "RACK" : item.floorLocation ? "FLOOR" : "UNASSIGNED",
+        rackCode:      item.rack?.code || "",
+        rackRowCode:   item.bin?.level?.row?.code || "",
+        rackLevelCode: item.bin?.level?.code || "",
+        rackBinCode:   item.bin?.code || "",
+        floorZone:     item.floorLocation?.zone || "",
+        floorCode:     item.floorLocation?.code || "",
         stockLocation: cf.stockLocation || "—",
         source:    cf.source    || "—",
         invoiceNo: cf.invoiceNo || item.batchNumber || "—",
+        // A single aggregated batch can legitimately span more than one "Type of Material"
+        // value (e.g. several pallets of the same material code came in tagged "Board",
+        // "CFC", and "Reel" on the same invoice) — cf.materialType may now be a comma-joined
+        // list rather than a single value. materialTypeList exposes the individual values for
+        // filtering; materialType keeps the raw (possibly joined) string for display.
         materialType: cf.materialType || item.material?.materialType || "",
+        materialTypeList: (Array.isArray(cf.materialTypes) && cf.materialTypes.length
+          ? cf.materialTypes
+          : (cf.materialType || item.material?.materialType || "").split(',').map((s: string) => s.trim()).filter(Boolean)
+        ),
         inwardDate: cf.inwardDate || "",
         huUnit:      cf.huUnit || item.material?.huUnit || "",
         tatRemarks:  cf.tatRemarks || "",
@@ -864,9 +913,15 @@ export default function InventoryClient() {
   const totalFgKg      = fgItems.reduce((s, i) => s + i.displayQtyKg, 0);
   const totalFgNos     = fgItems.reduce((s, i) => s + i.displayQtyNos, 0);
 
-  // All material types for filter dropdown
+  // All material types for filter dropdown — built from the flattened per-item list
+  // (materialTypeList), NOT the raw materialType string. A batch that spans multiple
+  // "Type of material" values (e.g. Board / CFC / Reel all on one invoice) stores
+  // materialType as a joined string like "Board, CFC, Reel" — using that raw string here
+  // would either produce one weird combined dropdown option or hide "CFC" entirely
+  // whenever it wasn't the sole value for a whole batch.
   const allMaterialTypes = useMemo(() => {
-    const types = new Set(enriched.map(i => i.materialType).filter(Boolean));
+    const types = new Set<string>();
+    enriched.forEach(i => i.materialTypeList.forEach((t: string) => { if (t) types.add(t); }));
     return Array.from(types).sort();
   }, [enriched]);
 
@@ -911,6 +966,70 @@ export default function InventoryClient() {
       });
   }, [activeItems]);
 
+  // Rack-wise allocation — only items actually stored in a real provisioned Rack Bin
+  // (storageKind === "RACK"), grouped Rack → Row → Bin. This is separate from the
+  // Bin-wise view above, which only ever showed the free-text BIN string and never
+  // distinguished true rack placement from a plain floor location.
+  const rackAllocation = useMemo(() => {
+    const rackMap = new Map<string, Map<string, { pallets: number; kg: number; items: EnrichedItem[] }>>();
+    activeItems.filter(i => i.storageKind === "RACK").forEach(i => {
+      const rack = i.rackCode || "Unknown Rack";
+      const row = i.rackRowCode || i.rackBinCode || "Unknown Row";
+      if (!rackMap.has(rack)) rackMap.set(rack, new Map());
+      const rowMap = rackMap.get(rack)!;
+      if (!rowMap.has(row)) rowMap.set(row, { pallets: 0, kg: 0, items: [] });
+      const cur = rowMap.get(row)!;
+      cur.pallets += i.displayQtyPallet;
+      cur.kg      += i.displayQtyKg;
+      cur.items.push(i);
+    });
+    return Array.from(rackMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([rack, rowMap]) => {
+        const rows = Array.from(rowMap.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([row, data]) => ({ row, ...data }));
+        return {
+          rack,
+          rows,
+          totalPallets: rows.reduce((s, r) => s + r.pallets, 0),
+          totalKg:      rows.reduce((s, r) => s + r.kg, 0),
+          totalItems:   rows.reduce((s, r) => s + r.items.length, 0),
+        };
+      });
+  }, [activeItems]);
+
+  // Floor-wise allocation — items stored in a FloorLocation (storageKind === "FLOOR"),
+  // grouped by zone → floor code.
+  const floorAllocation = useMemo(() => {
+    const zoneMap = new Map<string, Map<string, { pallets: number; kg: number; items: EnrichedItem[] }>>();
+    activeItems.filter(i => i.storageKind === "FLOOR").forEach(i => {
+      const zone = i.floorZone || "Unassigned";
+      const code = i.floorCode || "Unknown";
+      if (!zoneMap.has(zone)) zoneMap.set(zone, new Map());
+      const codeMap = zoneMap.get(zone)!;
+      if (!codeMap.has(code)) codeMap.set(code, { pallets: 0, kg: 0, items: [] });
+      const cur = codeMap.get(code)!;
+      cur.pallets += i.displayQtyPallet;
+      cur.kg      += i.displayQtyKg;
+      cur.items.push(i);
+    });
+    return Array.from(zoneMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([zone, codeMap]) => {
+        const codes = Array.from(codeMap.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([code, data]) => ({ code, ...data }));
+        return {
+          zone,
+          codes,
+          totalPallets: codes.reduce((s, c) => s + c.pallets, 0),
+          totalKg:      codes.reduce((s, c) => s + c.kg, 0),
+          totalItems:   codes.reduce((s, c) => s + c.items.length, 0),
+        };
+      });
+  }, [activeItems]);
+
   // Filter + sort
   const filtered = useMemo(() => {
     // Show all items with quantity > 0 PLUS any discrepancy items (even if received qty is 0)
@@ -919,7 +1038,9 @@ export default function InventoryClient() {
     if (view === "RM") list = list.filter(i => i.category.includes("RM"));
     if (view === "FG") list = list.filter(i => i.category.includes("FG"));
     if (filterWh)      list = list.filter(i => i.warehouseId === filterWh);
-    if (filterType)    list = list.filter(i => i.materialType === filterType);
+    // Match against the flattened list, not the raw (possibly comma-joined) materialType
+    // string — otherwise selecting "CFC" would never match a batch stored as "Board, CFC, Reel".
+    if (filterType)    list = list.filter(i => i.materialTypeList.includes(filterType));
     if (filterStatus === "DISCREPANCY") list = list.filter(i => i.isDiscrepancy);
     if (filterStatus === "GOOD")        list = list.filter(i => !i.isDiscrepancy);
 
@@ -1239,6 +1360,178 @@ export default function InventoryClient() {
                           <tr style={{ background: "#f0f9ff" }}>
                             <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#0369a1", borderBottom: "1px solid #e2e8f0", borderTop: bi > 0 ? "1px dashed #e2e8f0" : "none" }}>
                               <span style={{ background: "#0369a1", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>{bin}</span>
+                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
+                            </td>
+                          </tr>
+                          {items.map((item, ii) => (
+                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
+                              <td style={{ padding: "5px 10px 5px 40px", color: "#cbd5e1", fontSize: "11px" }}>↳</td>
+                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
+                              <td style={{ padding: "5px 10px" }}>
+                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
+                                  {item.category || "—"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rack-wise Allocation ──────────────────────────────────────── */}
+      {/* Only shows batches actually linked to a real provisioned Rack Bin (see inward.ts
+          commit route) — previously Rack/Row/Level data was never surfaced anywhere, only
+          the flat BIN string above, even when the Excel sheet's BIN column matched a real
+          rack bin code (e.g. "RA1-01"). */}
+      {rackAllocation.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+          <div style={{ fontSize: "10px", fontWeight: 800, color: "#7c2d12", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Grid3X3 size={12} /> Rack-wise Allocation
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+              <thead>
+                <tr>
+                  {[
+                    { h: "Bin",         align: "left"  },
+                    { h: "Material Code", align: "left" },
+                    { h: "Description", align: "left"  },
+                    { h: "HU Unit",     align: "left"  },
+                    { h: "Type",        align: "left"  },
+                    { h: "Category",    align: "left"  },
+                    { h: "Pallets",     align: "right" },
+                    { h: "Net Wt (kg)", align: "right" },
+                    { h: "Qty (Nos)",   align: "right" },
+                  ].map(({ h, align }) => (
+                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rackAllocation.map(({ rack, rows, totalPallets, totalKg, totalItems }, ri) => {
+                  const isOpen = expandedRacks.has(rack);
+                  return (
+                    <React.Fragment key={rack}>
+                      {/* ── Rack dropdown header ──────────── */}
+                      <tr
+                        onClick={() => toggleRack(rack)}
+                        style={{ background: "#fff7ed", cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#ffedd5"}
+                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#fff7ed"}
+                      >
+                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#c2410c", borderBottom: isOpen ? "1px solid #fed7aa" : "1px solid #e2e8f0", borderTop: ri > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "11px", color: "#c2410c", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
+                            <span style={{ background: "#c2410c", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>Rack {rack}</span>
+                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
+                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
+                            </span>
+                          </span>
+                        </td>
+                      </tr>
+                      {/* ── Expanded: rows + bin + material rows ──────────── */}
+                      {isOpen && rows.map(({ row, pallets, kg, items }, rowi) => (
+                        <React.Fragment key={row}>
+                          <tr style={{ background: "#fffbeb" }}>
+                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#b45309", borderBottom: "1px solid #e2e8f0", borderTop: rowi > 0 ? "1px dashed #e2e8f0" : "none" }}>
+                              <span style={{ background: "#b45309", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>Row {row}</span>
+                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
+                            </td>
+                          </tr>
+                          {items.map((item, ii) => (
+                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
+                              <td style={{ padding: "5px 10px 5px 40px", color: "#7c2d12", fontWeight: 700, fontSize: "10px", whiteSpace: "nowrap" }}>{item.rackBinCode || "—"}</td>
+                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
+                              <td style={{ padding: "5px 10px" }}>
+                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
+                                  {item.category || "—"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Floor-wise Allocation ─────────────────────────────────────── */}
+      {floorAllocation.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+          <div style={{ fontSize: "10px", fontWeight: 800, color: "#1e3a8a", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Grid3X3 size={12} /> Floor-wise Allocation
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+              <thead>
+                <tr>
+                  {[
+                    { h: "Floor Code",  align: "left"  },
+                    { h: "Material Code", align: "left" },
+                    { h: "Description", align: "left"  },
+                    { h: "HU Unit",     align: "left"  },
+                    { h: "Type",        align: "left"  },
+                    { h: "Category",    align: "left"  },
+                    { h: "Pallets",     align: "right" },
+                    { h: "Net Wt (kg)", align: "right" },
+                    { h: "Qty (Nos)",   align: "right" },
+                  ].map(({ h, align }) => (
+                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {floorAllocation.map(({ zone, codes, totalPallets, totalKg, totalItems }, zi) => {
+                  const isOpen = expandedFloorZones.has(zone);
+                  return (
+                    <React.Fragment key={zone}>
+                      {/* ── Floor zone dropdown header ──────────── */}
+                      <tr
+                        onClick={() => toggleFloorZone(zone)}
+                        style={{ background: "#eff6ff", cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#dbeafe"}
+                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#eff6ff"}
+                      >
+                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#1e40af", borderBottom: isOpen ? "1px solid #bfdbfe" : "1px solid #e2e8f0", borderTop: zi > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "11px", color: "#1e40af", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
+                            <span style={{ background: "#1e40af", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>Zone {zone}</span>
+                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
+                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
+                            </span>
+                          </span>
+                        </td>
+                      </tr>
+                      {/* ── Expanded: floor code + material rows ──────────── */}
+                      {isOpen && codes.map(({ code, pallets, kg, items }, ci) => (
+                        <React.Fragment key={code}>
+                          <tr style={{ background: "#f8fafc" }}>
+                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#334155", borderBottom: "1px solid #e2e8f0", borderTop: ci > 0 ? "1px dashed #e2e8f0" : "none" }}>
+                              <span style={{ background: "#334155", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>{code}</span>
                               <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
                             </td>
                           </tr>

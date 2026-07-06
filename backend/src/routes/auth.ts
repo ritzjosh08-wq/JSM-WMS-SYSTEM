@@ -66,8 +66,9 @@ function saveDynamicUsers(users: UserRecord[]) {
 // ─── Built-in accounts ────────────────────────────────────────────────────────
 const BASE_USERS: UserRecord[] = [
   { username: 'admin',       password: 'admin123',   name: 'Admin',              role: 'ADMIN',    location: 'All Warehouses' },
-  { username: 'chennaippd',  password: 'chennai123', name: 'Chennai Worker PPD', role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'CM35' },
-  { username: 'chennaicust', password: 'chennai123', name: 'Chennai PPD',        role: 'CUSTOMER', location: 'Chennai PPD' },
+  { username: 'chennaippd',  password: 'chennai123', name: 'Chennai Worker PPD',  role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'CM35', task: 'Inward & Receiving' },
+  { username: 'chennaifg05', password: 'chennai123', name: 'Chennai Worker FG05', role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'FG05', task: 'FG Storage & Dispatch' },
+  { username: 'chennaicust', password: 'chennai123', name: 'Chennai PPD',         role: 'CUSTOMER', location: 'Chennai PPD' },
 ];
 
 function getAllUsers(): UserRecord[] {

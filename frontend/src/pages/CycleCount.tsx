@@ -68,17 +68,21 @@ export default function CycleCount() {
     fetch(`${API}/cycle-count/warehouses`)
       .then(r => r.json())
       .then(json => {
-        const whs = json.warehouses || [];
+        let whs = json.warehouses || [];
+        // Scope the warehouse list: workers (and a selected worker) only see their
+        // own warehouse(s); admins with no selection see all.
+        const codes = selectedWorker?.warehouseCodes?.length
+          ? selectedWorker.warehouseCodes
+          : (selectedWorker?.warehouseCode
+              ? [selectedWorker.warehouseCode]
+              : (user?.role !== 'ADMIN' && user?.warehouseCode ? [user.warehouseCode] : null));
+        if (codes) whs = whs.filter((w: any) => codes.includes(w.code));
         setWarehouses(whs);
-        const activeCode = selectedWorker?.warehouseCode || selectedWorker?.warehouseCodes?.[0];
-        const workerWH = activeCode
-          ? whs.find((w: any) => w.code === activeCode)
-          : null;
-        const pick = workerWH || whs.find((w: any) => w.binCount > 0) || whs[0];
+        const pick = whs.find((w: any) => w.binCount > 0) || whs[0];
         if (pick) setSelectedWHId(pick.id);
       })
       .catch(() => {});
-  }, [selectedWorker]);
+  }, [selectedWorker, user]);
 
   // ── Reset (delete) current week's plan ────────────────────────────────────
   const [resetting, setResetting] = useState(false);

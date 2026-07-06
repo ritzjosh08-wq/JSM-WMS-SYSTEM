@@ -7,6 +7,8 @@ import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
 import CycleCount from './pages/CycleCount';
 import Materials from './pages/Materials';
+import Reports from './pages/Reports';
+import WarehouseMap from './pages/WarehouseMap';
 
 function Protected({ children }: { children: ReactNode }) {
   const user = useAuthStore(s => s.user);
@@ -24,6 +26,8 @@ export default function App() {
       <Route path="/inventory" element={<Protected><Inventory /></Protected>} />
       <Route path="/cycle-count" element={<Protected><CycleCount /></Protected>} />
       <Route path="/materials" element={<Protected><Materials /></Protected>} />
+      <Route path="/reports" element={<Protected><Reports /></Protected>} />
+      <Route path="/warehouse-map" element={<Protected><WarehouseMap /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

@@ -305,3 +305,20 @@ function dedupeById<T extends { id: string }>(rows: T[]): T[] {
 export function parseCF(s?: string | null): Record<string, any> {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
+
+// ─── Warehouse Map layout ─────────────────────────────────────────────────
+export interface WHInvBatch {
+  id: string; binId?: string | null; floorLocationId?: string | null;
+  quantity: number; batchNumber?: string | null; customFields?: string | null;
+  material?: { code: string; description: string; materialType?: string | null } | null;
+}
+export interface WHBin { id: string; code: string; isActive?: boolean }
+export interface WHRack { id: string; code: string; rows: { id: string; levels: { id: string; bins: WHBin[] }[] }[] }
+export interface WHFloor { id: string; code: string; zone: string; isActive?: boolean }
+export interface WarehouseLayout {
+  warehouseId: string; warehouseCode: string;
+  floorLocations: WHFloor[]; racks: WHRack[]; inventory: WHInvBatch[];
+}
+export async function fetchWarehouseLayout(code: string): Promise<WarehouseLayout> {
+  return getJSON<WarehouseLayout>(`/warehouse/layout?warehouse=${encodeURIComponent(code)}`);
+}

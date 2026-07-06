@@ -977,8 +977,11 @@ export default function InwardClient() {
   const [smartUploading, setSmartUploading] = useState(false);
   const [smartError, setSmartError] = useState<string | null>(null);
   const [smartImported, setSmartImported] = useState(0);
+  const [smartBlankSkipped, setSmartBlankSkipped] = useState(0);
+  const [smartTotalRows, setSmartTotalRows] = useState(0);
   const [dupeError, setDupeError] = useState<string | null>(null);
   const [stagingPrompt, setStagingPrompt] = useState<{ count: number; resolve: (yes: boolean) => void } | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | ManualEntry["entryStatus"]>("ALL");
 
   // ── Staging area ask helper — shows modal, returns promise ──────────────
   const askStaging = (count: number): Promise<boolean> =>
@@ -1003,6 +1006,9 @@ export default function InwardClient() {
   const approved    = entries.filter((e) => e.entryStatus === "APPROVED").length;
   const discrepancy = entries.filter((e) => e.entryStatus === "DISCREPANCY").length;
   const rejected    = entries.filter((e) => e.entryStatus === "REJECTED").length;
+
+  // ── Filtered view — driven by clicking a stat card (Total/Pending/Approved/Discrepancy/Rejected)
+  const filteredEntries = statusFilter === "ALL" ? entries : entries.filter((e) => e.entryStatus === statusFilter);
 
   const handleAddEntry = (entry: ManualEntry) => {
     setDupeError(null);
@@ -1063,6 +1069,8 @@ export default function InwardClient() {
     if (!window.confirm(`Clear all ${entries.length} entries and start fresh?`)) return;
     setEntries([]);
     setSmartImported(0);
+    setSmartBlankSkipped(0);
+    setSmartTotalRows(0);
     setSmartError(null);
     setSaveError(null);
     setSavedOk(false);
@@ -1089,7 +1097,7 @@ export default function InwardClient() {
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setSmartUploading(true); setSmartError(null); setSmartImported(0);
+    setSmartUploading(true); setSmartError(null); setSmartImported(0); setSmartBlankSkipped(0); setSmartTotalRows(0);
     try {
       // Send file to backend for Excel parsing (avoids timezone/date issues in frontend JS)
       const arrayBuf = await file.arrayBuffer();
@@ -1110,8 +1118,10 @@ export default function InwardClient() {
         const err = await parseRes.json();
         throw new Error(err.error || 'Failed to parse Excel on backend');
       }
-      const { rows: parsedRows } = await parseRes.json();
+      const { rows: parsedRows, blankRowsSkipped, totalRowsInSheet } = await parseRes.json();
       if (!parsedRows || !parsedRows.length) throw new Error("No data rows found in the file.");
+      setSmartBlankSkipped(blankRowsSkipped || 0);
+      setSmartTotalRows(totalRowsInSheet ?? parsedRows.length);
 
       // Helpers that work on the backend-parsed objects (dates/times already converted to strings)
       const toStr = (v: any): string =>
@@ -1360,6 +1370,14 @@ export default function InwardClient() {
                 <CheckCircle2 size={14} /> {smartImported} rows processed — scroll down to review ↓
               </div>
             )}
+            {!smartUploading && smartImported > 0 && smartBlankSkipped > 0 && (
+              <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold bg-amber-50 border border-amber-300 rounded-lg px-3 py-1.5">
+                <TriangleAlert size={13} />
+                {smartTotalRows} row{smartTotalRows !== 1 ? "s" : ""} found in the sheet below the header —
+                {" "}{smartBlankSkipped} {smartBlankSkipped === 1 ? "was" : "were"} completely empty and skipped
+                (likely a spacer row between shipments). If you expected data there, check the source file.
+              </div>
+            )}
             {smartError && <div className="flex items-center gap-2 text-red-600 text-sm"><AlertCircle size={14} /> {smartError}</div>}
           </div>
           <button onClick={() => { setUploadOpen(false); setSmartImported(0); setSmartError(null); }}
@@ -1396,17 +1414,36 @@ export default function InwardClient() {
       {/* ── Stats + Controls */}
       <div className="flex gap-3 items-stretch flex-shrink-0 flex-wrap">
         {[
-          { label: "Total",       val: entries.length, color: "text-gray-700",  bg: "bg-gray-50",   border: "border-gray-200"  },
-          { label: "Pending",     val: pending,        color: "text-amber-700", bg: "bg-amber-50",  border: "border-amber-200" },
-          { label: "Approved",    val: approved,       color: "text-green-700", bg: "bg-green-50",  border: "border-green-200" },
-          { label: "Discrepancy", val: discrepancy,    color: "text-orange-700",bg: "bg-orange-50", border: "border-orange-200"},
-          { label: "Rejected",    val: rejected,       color: "text-red-700",   bg: "bg-red-50",    border: "border-red-200"   },
-        ].map((s) => (
-          <div key={s.label} className={`${s.bg} ${s.border} border rounded-xl px-4 py-2 text-center min-w-[72px]`}>
-            <div className={`text-2xl font-black ${s.color}`}>{s.val}</div>
-            <div className="text-xs text-gray-400 font-semibold uppercase tracking-wide mt-0.5">{s.label}</div>
-          </div>
-        ))}
+          { label: "Total",       val: entries.length, color: "text-gray-700",  bg: "bg-gray-50",   border: "border-gray-200",  filter: "ALL" as const },
+          { label: "Pending",     val: pending,        color: "text-amber-700", bg: "bg-amber-50",  border: "border-amber-200", filter: "PENDING" as const },
+          { label: "Approved",    val: approved,       color: "text-green-700", bg: "bg-green-50",  border: "border-green-200", filter: "APPROVED" as const },
+          { label: "Discrepancy", val: discrepancy,    color: "text-orange-700",bg: "bg-orange-50", border: "border-orange-200",filter: "DISCREPANCY" as const },
+          { label: "Rejected",    val: rejected,       color: "text-red-700",   bg: "bg-red-50",    border: "border-red-200",   filter: "REJECTED" as const },
+        ].map((s) => {
+          const isActive = statusFilter === s.filter;
+          return (
+            <button
+              key={s.label}
+              type="button"
+              onClick={() => setStatusFilter((prev) => (prev === s.filter ? "ALL" : s.filter))}
+              title={s.filter === "ALL" ? "Show all entries" : `Show only ${s.label} entries`}
+              className={`${s.bg} border rounded-xl px-4 py-2 text-center min-w-[72px] transition cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${
+                isActive ? `${s.border} ring-2 ring-offset-1 ring-blue-400 shadow-md` : s.border
+              }`}
+            >
+              <div className={`text-2xl font-black ${s.color}`}>{s.val}</div>
+              <div className="text-xs text-gray-400 font-semibold uppercase tracking-wide mt-0.5">{s.label}</div>
+            </button>
+          );
+        })}
+        {statusFilter !== "ALL" && (
+          <button
+            onClick={() => setStatusFilter("ALL")}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition self-center"
+          >
+            <X size={12} /> Clear filter
+          </button>
+        )}
         <div className="flex-1" />
         {!isViewer && entries.length > 0 && (
           <>
@@ -1503,6 +1540,15 @@ export default function InwardClient() {
               </>
             )}
           </div>
+        ) : filteredEntries.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400">
+            <TriangleAlert size={44} className="opacity-20" />
+            <div className="font-bold text-lg text-gray-500">No {statusFilter.toLowerCase()} entries</div>
+            <button onClick={() => setStatusFilter("ALL")}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition">
+              <X size={13} /> Clear filter and show all {entries.length}
+            </button>
+          </div>
         ) : (
           <>
             {/* Column headers */}
@@ -1514,7 +1560,7 @@ export default function InwardClient() {
             </div>
 
             {/* Entry rows */}
-            {entries.map((entry, idx) => (
+            {filteredEntries.map((entry, idx) => (
               <EntryRow
                 key={entry.id}
                 entry={entry}

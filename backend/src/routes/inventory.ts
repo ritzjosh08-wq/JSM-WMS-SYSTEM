@@ -25,7 +25,9 @@ router.get('/', async (req, res) => {
         material: true,
         warehouse: true,
         rack: true,
-        bin: true,
+        // Nest level → row so the frontend can show the full Rack / Row / Level / Bin
+        // hierarchy (not just the bin code string) for batches stored in a real rack bin.
+        bin: { include: { level: { include: { row: true } } } },
         floorLocation: true,
       },
       orderBy: { receiptDate: 'asc' }

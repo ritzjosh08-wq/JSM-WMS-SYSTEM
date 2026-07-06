@@ -20,6 +20,9 @@ export default function Login() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
+      if (data.user?.role === 'CUSTOMER') {
+        throw new Error('Customer accounts sign in through the Customer Portal app, not the WMS.');
+      }
       login(data.user);
     } catch (err: any) {
       setError(err.message);
@@ -169,7 +172,6 @@ export default function Login() {
           {[
             { user: 'admin',       pass: 'admin123',   label: 'Admin',              role: 'Admin'    },
             { user: 'chennaippd',  pass: 'chennai123', label: 'Chennai Worker PPD', role: 'Worker'   },
-            { user: 'chennaicust', pass: 'chennai123', label: 'Chennai PPD',        role: 'Customer' },
           ].map(c => (
             <div
               key={c.user}

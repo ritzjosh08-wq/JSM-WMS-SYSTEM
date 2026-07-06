@@ -291,6 +291,23 @@ function parseCF(s: string | null | undefined): any {
   try { return JSON.parse(s || "{}"); } catch { return {}; }
 }
 
+// Every distinct physical HU tag recorded against a batch. Older records (committed before
+// the multi-tag fix) only ever stored a single `huUnit` string — fall back to that so old
+// data still matches. New records carry the full `huUnits` array (see backend commit route).
+function batchHUTags(cf: any): string[] {
+  if (Array.isArray(cf.huUnits) && cf.huUnits.length) return cf.huUnits.map((h: any) => String(h || "").trim()).filter(Boolean);
+  return cf.huUnit ? [String(cf.huUnit).trim()] : [];
+}
+
+// Generic units-of-measure ("Kg", "Nos", "Pallet"...) are not unique physical tags — many
+// unrelated batches can legitimately share the same one. Treating them as a searchable HU
+// code causes false collisions (scanning "kg" could match several different materials).
+const GENERIC_HU_VALUES = new Set(["nos", "pallet", "pallets", "box", "boxes", "kg", "kgs"]);
+function isSpecificHUValue(v: string): boolean {
+  const s = v.trim().toLowerCase();
+  return s !== "" && !GENERIC_HU_VALUES.has(s);
+}
+
 export default function OutwardClient() {
   const user = useAuthStore(s => s.user);
   const selectedWorker = useAuthStore(s => s.selectedWorker);
@@ -321,6 +338,7 @@ export default function OutwardClient() {
   const [matchedBatches, setMatchedBatches] = useState<RawBatch[]>([]);
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(new Set());
   const [huSearched, setHuSearched] = useState(false);
+  const [huGenericWarning, setHuGenericWarning] = useState<string | null>(null);
   // Per-batch dispatch qty (partial dispatch — defaults to full batch quantity)
   const [huBatchQtys, setHuBatchQtys] = useState<Map<string, number>>(new Map());
 
@@ -488,12 +506,19 @@ export default function OutwardClient() {
     if (fromBulk.length) setHuEntries(fromBulk);
     const entered = combined;
     if (!entered.length) return;
-    const lower = new Set(entered.map(h => h.toLowerCase()));
+    const lower = new Set(entered.map(h => h.toLowerCase()).filter(isSpecificHUValue));
+    const genericSearched = entered.filter(h => !isSpecificHUValue(h));
     const matched = allBatches.filter(b => {
       const cf = parseCF(b.customFields);
-      const hu = (cf.huUnit || "").trim().toLowerCase();
-      return hu && lower.has(hu);
+      // Check EVERY HU tag ever recorded on this batch, not just the most recent one —
+      // otherwise scanning an earlier pallet's tag (still legitimately in stock) finds nothing.
+      return batchHUTags(cf).some(tag => lower.has(tag.toLowerCase()));
     });
+    setHuGenericWarning(
+      genericSearched.length
+        ? `Ignored "${genericSearched.join('", "')}" — that's a generic unit of measure, not a specific pallet tag, so it can't be used to look up a single item.`
+        : null
+    );
     setMatchedBatches(matched);
     setSelectedBatchIds(new Set(matched.map(b => b.id)));
     // Initialise dispatch qty = full quantity for each batch (user can reduce)
@@ -715,7 +740,7 @@ export default function OutwardClient() {
             </button>
             {huSearched && (
               <button
-                onClick={() => { setHuSearched(false); setMatchedBatches([]); setSelectedBatchIds(new Set()); setHuEntries([""]); setHuBulkText(""); }}
+                onClick={() => { setHuSearched(false); setMatchedBatches([]); setSelectedBatchIds(new Set()); setHuEntries([""]); setHuBulkText(""); setHuGenericWarning(null); }}
                 style={{ display: "flex", alignItems: "center", gap: "6px", padding: "7px 14px", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: "8px", color: "#64748b", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
                 <XCircle size={12} /> Clear
               </button>
@@ -726,6 +751,12 @@ export default function OutwardClient() {
         {/* Search results */}
         {huSearched && (
           <div style={{ marginTop: "16px" }}>
+            {huGenericWarning && (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 14px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "8px", marginBottom: "10px" }}>
+                <AlertTriangle size={14} style={{ color: "#b45309", flexShrink: 0 }} />
+                <span style={{ fontSize: "11px", color: "#92400e", fontWeight: 600 }}>{huGenericWarning}</span>
+              </div>
+            )}
             {matchedBatches.length === 0 ? (
               <div style={{ textAlign: "center", padding: "24px", background: "#fef2f2", borderRadius: "10px", border: "1px solid #fca5a5" }}>
                 <AlertTriangle size={24} style={{ color: "#dc2626", margin: "0 auto 8px" }} />

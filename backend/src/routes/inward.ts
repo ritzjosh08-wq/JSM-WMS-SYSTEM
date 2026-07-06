@@ -30,7 +30,12 @@ router.post('/parse-excel', express.json({ limit: '25mb' }), (req, res) => {
       if (rawData[i].filter((c: any) => String(c).trim()).length >= 3) { headerRowIdx = i; break; }
     }
     const headers: string[] = rawData[headerRowIdx].map((h: any) => String(h).trim());
-    const dataRows = rawData.slice(headerRowIdx + 1).filter((r: any[]) => r.some((c: any) => String(c).trim()));
+    const rowsAfterHeader = rawData.slice(headerRowIdx + 1);
+    const dataRows = rowsAfterHeader.filter((r: any[]) => r.some((c: any) => String(c).trim()));
+    // Track completely blank rows (e.g. spacer rows between shipment batches) so the
+    // frontend can tell the user exactly how many rows were skipped and why the
+    // imported count may be lower than the sheet's total row count.
+    const blankRowsSkipped = rowsAfterHeader.length - dataRows.length;
 
     // Helper: convert Excel date serial to DD-MM-YYYY string (no timezone conversion)
     const excelSerialToDate = (serial: number): string => {
@@ -80,7 +85,7 @@ router.post('/parse-excel', express.json({ limit: '25mb' }), (req, res) => {
       return obj;
     });
 
-    res.json({ headers, rows: parsedRows });
+    res.json({ headers, rows: parsedRows, blankRowsSkipped, totalRowsInSheet: rowsAfterHeader.length });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -219,7 +224,11 @@ router.post('/commit', async (req, res) => {
               batchNumber: row.invoiceNumber || `BATCH-${Date.now()}`,
               warehouseId: groupWarehouse.id,
               lineItemStatus: row.status,
-              huUnit: row.huUnit || null,   // null/blank if not provided in sheet
+              // Prefer the ACTUAL/received HU tag (set when a discrepancy corrected the physical
+              // unit's identifier) over the original invoice-expected huUnit — dispatch/outbound
+              // scanning looks up by whatever tag is physically on the pallet, not what the
+              // invoice originally said.
+              huUnit: row.actualHuUnit || row.huUnit || null,   // null/blank if not provided in sheet
               description: row.description || null,
               binLocation: row.binLocation || null,
               remarks: row.remarks || null,
@@ -303,7 +312,10 @@ router.post('/commit', async (req, res) => {
           row.receivedNetWeight  || row.invoiceNetWeight   || 0;
         // Skip only non-discrepancy items with no quantity; discrepancy items always commit
         if (receivedQty <= 0 && !hasDiscrepancy) continue;
-        const invCustomFields = JSON.stringify({
+        // The physically-verified HU tag for THIS row (prefer the discrepancy-corrected
+        // actualHuUnit over the original invoice huUnit — see comment on the line item above).
+        const rowHU = (row.actualHuUnit || row.huUnit || '').toString().trim();
+        const invCustomFieldsObj: Record<string, any> = {
           netWeight:           row.receivedNetWeight    || row.invoiceNetWeight    || 0,
           invoiceNetWeight:    row.invoiceNetWeight     || 0,
           receivedNetWeight:   row.receivedNetWeight    || 0,
@@ -321,7 +333,15 @@ router.post('/commit', async (req, res) => {
           category:       row.category,
           binLocation:    row.binLocation,
           stockLocation:  row.stockLocation || first.stockLocation || "",
-          huUnit:         row.huUnit,
+          // `huUnit` = most recently committed tag (kept for backward compatibility with
+          // anything reading a single value). `huUnits` = every distinct physical HU tag ever
+          // folded into this aggregate batch — see merge logic below, right before save.
+          // NOTE: multiple Excel rows (one per physical pallet) with the same material code +
+          // invoice number all aggregate into ONE InventoryBatch. Each pallet can have its own
+          // unique HU tag. Only ever storing a single `huUnit` here silently discarded every
+          // tag except the last row committed — that's why Outward Dispatch's HU search found
+          // some HU numbers fine but not others.
+          huUnit:         rowHU,
           invoiceNo:      row.invoiceNumber || first.invoiceNumber || "",
           sapDocNo:       row.sapDocumentNumber || first.sapDocumentNumber || "",
           gateSerialNo:   row.gateSerialNo  || first.gateSerialNo  || "",
@@ -331,17 +351,26 @@ router.post('/commit', async (req, res) => {
           transporter:    row.transporter   || first.transporter   || "",
           sealNumber:     row.sealNumber    || first.sealNumber    || "",
           status:         row.status,
+          // Same overwrite problem as huUnit above can happen here too: the Excel sheet's
+          // "Type of Material" column is sometimes filled in differently row-to-row even for
+          // the same material code + invoice (e.g. "Reel" / "CFC" / "Board" all appearing for
+          // one material code). `materialTypes` accumulates every distinct value seen; see
+          // merge logic below, right before save.
           materialType:   row.materialType || "",
           inwardDate:     row.date || first.date || "",
           tatRemarks:     row.tatRemarks   || first.tatRemarks || "",
           createdBy:      createdBy        || "",
           discrepancy:    hasDiscrepancy,
-        });
+        };
 
-        // Resolve binLocation → FloorLocation id, auto-creating if new.
-        // Must happen BEFORE the existing-batch lookup so resolvedWarehouseId is set.
-        // Any new bin/location code is auto-recorded so all workers' locations land in warehouse map.
+        // Resolve binLocation → either a real Rack Bin (if the code matches one already
+        // provisioned for this warehouse, e.g. "RA1-01") or a FloorLocation (auto-creating
+        // if new, e.g. "A2-01"). Must happen BEFORE the existing-batch lookup so
+        // resolvedWarehouseId is set. Any new floor code is auto-recorded so all workers'
+        // locations land in the warehouse map.
         let resolvedFloorLocationId: string | null = null;
+        let resolvedRackId: string | null = null;
+        let resolvedBinId: string | null = null;
         // Start from groupWarehouse (already resolved/auto-created for this invoice group)
         let resolvedWarehouseId: string = groupWarehouse.id;
 
@@ -370,34 +399,95 @@ router.post('/commit', async (req, res) => {
         if (row.binLocation && row.binLocation.trim()) {
           const binCode = row.binLocation.trim();
 
-          // Find existing FloorLocation for this warehouse
-          let floorLoc = await prisma.floorLocation.findFirst({
-            where: { code: binCode, warehouseId: targetWarehouse.id },
+          // First: does this code match an already-provisioned Rack Bin (e.g. "RA1-01",
+          // seeded per-warehouse in warehouse.ts)? Rack bin codes are distinct from generic
+          // floor-location codes (e.g. "A2-01"). Matching against the real Bin table lets the
+          // app track true Rack/Row/Level placement — previously EVERY bin code was forced
+          // into a flat FloorLocation string, so Rack allotment from the Excel sheet's BIN
+          // column was silently dropped even when it referenced a real rack bin.
+          let matchedBin = await prisma.bin.findFirst({
+            where: { code: binCode, rack: { warehouseId: targetWarehouse.id } },
           });
-
-          // Auto-create if not found — records any new location entered by any user/worker
-          if (!floorLoc) {
-            const zone = (row.category || row.materialType || 'GENERAL').toUpperCase().slice(0, 20);
-            floorLoc = await prisma.floorLocation.create({
-              data: {
-                warehouseId: targetWarehouse.id,
-                zone,
-                code: binCode,
-                capacity: 10000,
-                isActive: true,
-              },
+          if (!matchedBin && binCode.toUpperCase() !== binCode) {
+            matchedBin = await prisma.bin.findFirst({
+              where: { code: binCode.toUpperCase(), rack: { warehouseId: targetWarehouse.id } },
             });
-            console.log(`Auto-created floor location: ${binCode} in ${targetWarehouse.code}`);
           }
 
-          resolvedFloorLocationId = floorLoc.id;
-          resolvedWarehouseId = floorLoc.warehouseId;
+          if (matchedBin) {
+            resolvedBinId = matchedBin.id;
+            resolvedRackId = matchedBin.rackId;
+            resolvedWarehouseId = targetWarehouse.id;
+          } else {
+            // Not a recognised rack bin — treat as a floor location as before, auto-creating
+            // if it's new (records any new location entered by any user/worker).
+            let floorLoc = await prisma.floorLocation.findFirst({
+              where: { code: binCode, warehouseId: targetWarehouse.id },
+            });
+
+            if (!floorLoc) {
+              const zone = (row.category || row.materialType || 'GENERAL').toUpperCase().slice(0, 20);
+              floorLoc = await prisma.floorLocation.create({
+                data: {
+                  warehouseId: targetWarehouse.id,
+                  zone,
+                  code: binCode,
+                  capacity: 10000,
+                  isActive: true,
+                },
+              });
+              console.log(`Auto-created floor location: ${binCode} in ${targetWarehouse.code}`);
+            }
+
+            resolvedFloorLocationId = floorLoc.id;
+            resolvedWarehouseId = floorLoc.warehouseId;
+          }
         }
 
         // Find existing batch for this material+invoice in the resolved warehouse
         const existing = await prisma.inventoryBatch.findFirst({
           where: { materialId: material.id, batchNumber: batchKey, warehouseId: resolvedWarehouseId },
         });
+
+        // Merge this row's HU tag AND material type into the batch's running lists of distinct
+        // values, instead of overwriting — see notes above invCustomFieldsObj.
+        let priorHUs: string[] = [];
+        let priorTypes: string[] = [];
+        if (existing) {
+          let existingCf: any = {};
+          try { existingCf = JSON.parse(existing.customFields || '{}'); } catch {}
+          priorHUs = Array.isArray(existingCf.huUnits)
+            ? existingCf.huUnits
+            : (existingCf.huUnit ? [existingCf.huUnit] : []);
+          priorTypes = Array.isArray(existingCf.materialTypes)
+            ? existingCf.materialTypes
+            : (existingCf.materialType ? [existingCf.materialType] : []);
+        }
+        const mergedHUs = rowHU && !priorHUs.some(h => h.toLowerCase() === rowHU.toLowerCase())
+          ? [...priorHUs, rowHU]
+          : priorHUs;
+        invCustomFieldsObj.huUnits = mergedHUs;
+        // Keep `huUnit` pointing at the latest tag if this row had one, else the most recent known tag
+        invCustomFieldsObj.huUnit = rowHU || mergedHUs[mergedHUs.length - 1] || '';
+
+        const rowType = (row.materialType || '').toString().trim();
+        const mergedTypes = rowType && !priorTypes.some(t => t.toLowerCase() === rowType.toLowerCase())
+          ? [...priorTypes, rowType]
+          : priorTypes;
+        invCustomFieldsObj.materialTypes = mergedTypes;
+        // Keep single `materialType` for backward compatibility with existing readers — when a
+        // batch actually spans more than one distinct type, join them so nothing is silently
+        // dropped (e.g. "Board, CFC, Reel" instead of just the last one committed).
+        invCustomFieldsObj.materialType = mergedTypes.join(', ') || rowType || '';
+        const invCustomFields = JSON.stringify(invCustomFieldsObj);
+
+        // Location fields to apply — a rack Bin match takes priority over (and clears) any
+        // floor location, and vice versa, so a batch never ends up pointing at both.
+        const locationFields = resolvedBinId
+          ? { binId: resolvedBinId, rackId: resolvedRackId, floorLocationId: null, warehouseId: resolvedWarehouseId }
+          : resolvedFloorLocationId
+            ? { floorLocationId: resolvedFloorLocationId, rackId: null, binId: null, warehouseId: resolvedWarehouseId }
+            : {};
 
         if (existing) {
           await prisma.inventoryBatch.update({
@@ -406,7 +496,7 @@ router.post('/commit', async (req, res) => {
               quantity: existing.quantity + receivedQty,
               lastMovementDate: new Date(),
               customFields: invCustomFields,
-              ...(resolvedFloorLocationId ? { floorLocationId: resolvedFloorLocationId, warehouseId: resolvedWarehouseId } : {}),
+              ...locationFields,
             },
           });
         } else {
@@ -416,6 +506,8 @@ router.post('/commit', async (req, res) => {
               batchNumber: batchKey,
               quantity: receivedQty,
               warehouseId: resolvedWarehouseId,
+              rackId: resolvedRackId,
+              binId: resolvedBinId,
               floorLocationId: resolvedFloorLocationId,
               receiptDate: parseInwardDate(row.date),
               stockStatus: hasDiscrepancy ? "DISCREPANCY" : "GOOD",

@@ -64,7 +64,14 @@ export const useAuthStore = create<AuthStore>((set) => ({
   selectedWorker: loadSelectedWorker(),
   login: (user) => {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
-    const initialScope = user.role === 'CUSTOMER' ? combinedScope(user) : null;
+    // Scope non-admins to their own warehouse(s):
+    //  • CUSTOMER → all areas of their workers (combined)
+    //  • WORKER   → just their own warehouse (so they never see other sites)
+    let initialScope: SelectedWorker | null = null;
+    if (user.role === 'CUSTOMER') initialScope = combinedScope(user);
+    else if (user.role === 'WORKER' && user.warehouseCode) {
+      initialScope = { username: user.username, name: user.name, location: user.location || '', warehouseCode: user.warehouseCode };
+    }
     if (initialScope) sessionStorage.setItem(WORKER_SEL_KEY, JSON.stringify(initialScope));
     else sessionStorage.removeItem(WORKER_SEL_KEY);
     set({ user, selectedWorker: initialScope });

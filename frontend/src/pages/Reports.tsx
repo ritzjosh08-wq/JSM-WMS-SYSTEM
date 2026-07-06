@@ -1110,13 +1110,22 @@ export default function Reports() {
   const matchCat = (cat: string) =>
     catFilter === 'ALL' || String(cat || '').toUpperCase().includes(catFilter);
 
+  // A batch/line item's materialType is sometimes a comma-joined string (e.g. "Board, CFC,
+  // Reel") when its underlying Excel rows had different "Type of material" values for the
+  // same material code + invoice — see inward.ts commit route. Always check against the
+  // flattened list (customFields.materialTypes if present) so a value like "CFC" is still
+  // findable even when it wasn't the sole type for a whole batch.
+  const materialTypeList = (cf: any): string[] =>
+    Array.isArray(cf.materialTypes) && cf.materialTypes.length
+      ? cf.materialTypes
+      : String(cf.materialType || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+
   // ── Inward: filter at line-item level ──────────────────────────────────────
   const inwardMaterialTypes: string[] = (() => {
     const types = new Set<string>();
     rows.forEach((entry: any) =>
       (entry.lineItems || []).forEach((item: any) => {
-        const t = parseCF(item.customFields).materialType;
-        if (t) types.add(t);
+        materialTypeList(parseCF(item.customFields)).forEach(t => types.add(t));
       })
     );
     return Array.from(types).sort();
@@ -1128,7 +1137,7 @@ export default function Reports() {
           const cf = parseCF(item.customFields);
           const cat = cf.category || item.category || entry.category || '';
           if (!matchCat(cat)) return false;
-          if (inwardTypeFilter && (cf.materialType || '') !== inwardTypeFilter) return false;
+          if (inwardTypeFilter && !materialTypeList(cf).includes(inwardTypeFilter)) return false;
           return true;
         }),
       })).filter((e: any) => e.lineItems.length > 0)
@@ -1148,8 +1157,10 @@ export default function Reports() {
   const inventoryMaterialTypes: string[] = (() => {
     const types = new Set<string>();
     rows.forEach((r: any) => {
-      const t = parseCF(r.customFields).materialType || r.material?.materialType;
-      if (t) types.add(t);
+      const cf = parseCF(r.customFields);
+      const list = materialTypeList(cf);
+      if (list.length) list.forEach(t => types.add(t));
+      else if (r.material?.materialType) types.add(r.material.materialType);
     });
     return Array.from(types).sort();
   })();
@@ -1157,7 +1168,11 @@ export default function Reports() {
     const cf = parseCF(r.customFields);
     const cat = cf.category || r.material?.category || '';
     if (catFilter !== 'ALL' && !matchCat(cat)) return false;
-    if (inventoryTypeFilter && (cf.materialType || r.material?.materialType || '') !== inventoryTypeFilter) return false;
+    if (inventoryTypeFilter) {
+      const list = materialTypeList(cf);
+      const matches = list.length ? list.includes(inventoryTypeFilter) : r.material?.materialType === inventoryTypeFilter;
+      if (!matches) return false;
+    }
     if (inventoryStatusFilter) {
       const isDisc = !!(cf.discrepancy || r.stockStatus === 'DISCREPANCY' ||
         Number(cf.shortInPallet||0) !== 0 || Number(cf.shortExcessInKg||0) !== 0 || cf.discrepancyRemarks);

@@ -88,11 +88,22 @@ async function runMigrations() {
   } catch (e: any) {
     console.warn('Cleanup WH-DEFAULT skipped:', e.message);
   }
+
+  // ── Keep only the active warehouses in use (CM35, FG05); deactivate the rest ──
+  try {
+    const REMOVE = ['CM36', 'SALEM1', 'SALEM2', 'SALEM3'];
+    const r = await prisma.warehouse.updateMany({ where: { code: { in: REMOVE } }, data: { isActive: false } });
+    if (r.count > 0) console.log(`Cleanup: deactivated ${r.count} unused warehouse(s): ${REMOVE.join(', ')}`);
+  } catch (e: any) {
+    console.warn('Cleanup unused warehouses skipped:', e.message);
+  }
 }
 runMigrations().then(ensureWorkerWarehouses);
 
 app.use(cors());
-app.use(express.json());
+// Raise body limit so large inward-commit payloads don't trip Express's default
+// 100kb limit (which returns an HTML error page -> "Unexpected token '<'").
+app.use(express.json({ limit: '50mb' }));
 
 import inwardRouter from './routes/inward';
 import dashboardRouter from './routes/dashboard';
@@ -115,6 +126,18 @@ app.use('/api/warehouse', warehouseRouter);
 // Basic health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', database: 'PostgreSQL connected' });
+});
+
+// Any unmatched /api route returns JSON (never HTML) so the client's res.json() never chokes.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `Not found: ${req.method} ${req.originalUrl}` });
+});
+
+// Global error handler - always respond with JSON, never Express's default HTML page.
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('Unhandled error:', err);
+  if (res.headersSent) return next(err);
+  res.status(err?.status || err?.statusCode || 500).json({ error: err?.message || 'Internal server error' });
 });
 
 // Start server

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { C, IconDashboard, IconInventory, IconCycle, IconMaterials, IconLogout } from '../ui';
+import { C, IconDashboard, IconInventory, IconCycle, IconMaterials, IconReports, IconMap, IconLogout } from '../ui';
 import InstallButton from './InstallButton';
 import WorkerDropdown from './WorkerDropdown';
 
@@ -10,6 +10,8 @@ const NAV = [
   { to: '/inventory', label: 'Inventory', Icon: IconInventory },
   { to: '/cycle-count', label: 'Cycle Count', Icon: IconCycle },
   { to: '/materials', label: 'Material Master', Icon: IconMaterials },
+  { to: '/reports', label: 'Reports', Icon: IconReports },
+  { to: '/warehouse-map', label: 'Warehouse Map', Icon: IconMap },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
