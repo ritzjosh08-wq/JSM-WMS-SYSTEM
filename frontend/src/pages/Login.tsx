@@ -23,7 +23,7 @@ export default function Login() {
       if (data.user?.role === 'CUSTOMER') {
         throw new Error('Customer accounts sign in through the Customer Portal app, not the WMS.');
       }
-      login(data.user);
+      login(data.user, data.token);
     } catch (err: any) {
       setError(err.message);
     } finally {

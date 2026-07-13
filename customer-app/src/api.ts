@@ -6,8 +6,26 @@
 export const API_BASE: string =
   (import.meta as any).env?.VITE_API_BASE || 'http://localhost:5001/api';
 
+const TOKEN_KEY = 'jsm_customer_token';
+
+export function getToken(): string | null {
+  // Stored JSON.stringify'd (like every other key in authStore.ts's sessionStorage
+  // persistence), so it must be JSON.parse'd back out here, not read as a raw string.
+  try { const raw = sessionStorage.getItem(TOKEN_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
 async function getJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const token = getToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (res.status === 401) {
+    // Session expired/invalid — clear it and let the app fall back to the Login screen.
+    // Dynamic import avoids a circular import at module-init time (authStore imports
+    // types from this file).
+    const { useAuthStore } = await import('./store/authStore');
+    useAuthStore.getState().logout();
+  }
   if (!res.ok) {
     let msg = `Request failed (${res.status})`;
     try { const j = await res.json(); msg = j.error || msg; } catch {}
@@ -141,14 +159,17 @@ export interface DashboardStats {
   inventoryRM: number;
   inventoryFG: number;
   totalPallets: number;
+  totalQty?: number;
   discrepancyCount: number;
+  discrepancyByCategory?: { category: string; count: number }[];
   stockLocations: { name: string; pallets: number }[];
+  warehouseBreakdown?: { code: string; name: string; pallets: number; qty: number }[];
   rmByType: { type: string; pallets: number }[];
   recentInwards: InwardEntry[];
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
-export async function login(username: string, password: string): Promise<AuthUser> {
+export async function login(username: string, password: string): Promise<{ user: AuthUser; token: string }> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -156,7 +177,7 @@ export async function login(username: string, password: string): Promise<AuthUse
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Login failed');
-  return data.user as AuthUser;
+  return { user: data.user as AuthUser, token: data.token as string };
 }
 
 // ── Resolve which warehouse codes a customer is allowed to see ────────────────

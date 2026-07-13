@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../store/authStore';
-import { API_BASE } from '../api';
+import { API_BASE, getToken } from '../api';
 
 const API = API_BASE;
 
@@ -107,14 +107,20 @@ export default function WarehouseMap() {
 
   const binOccupancy = React.useMemo(() => {
     const map = new Map<string, InventoryBatch[]>();
-    inventory.forEach(inv => { const key = inv.binId || inv.floorLocationId; if (key) { if (!map.has(key)) map.set(key, []); map.get(key)!.push(inv); } });
+    inventory.forEach(inv => {
+      if ((inv.quantity ?? 0) <= 0) return;
+      const key = inv.binId || inv.floorLocationId; if (key) { if (!map.has(key)) map.set(key, []); map.get(key)!.push(inv); }
+    });
     return map;
   }, [inventory]);
 
   const load = useCallback(async () => {
     setLoading(true); setSeeding(false);
     try {
-      const r = await fetch(`${API}/warehouse/layout?warehouse=${selectedWarehouse}`);
+      const token = getToken();
+      const r = await fetch(`${API}/warehouse/layout?warehouse=${selectedWarehouse}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       if (!r.ok) throw new Error('Failed to load layout');
       const data = await r.json();
       if (data.racks?.length === 0 && data.floorLocations?.length === 0) setSeeding(true);
