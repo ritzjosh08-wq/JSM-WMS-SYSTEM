@@ -196,6 +196,18 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
+// ── JSON parse error handler — returns JSON instead of Express HTML 400/413 pages ──
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request payload too large. Maximum size is 25MB.' });
+  }
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON in request body.' });
+  }
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: err.message || 'Internal server error' });
+});
+
 // Basic health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', database: 'PostgreSQL connected' });
