@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Package, Weight, Layers, Search, RefreshCw, ArrowDownToLine,
   ArrowUpFromLine, MapPin, Edit3, Check, X, ChevronUp, ChevronDown, Trash2,
-  Grid3X3, History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck
+  Grid3X3, History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck, Copy
 } from "lucide-react";
 import { useAuthStore, whQuery } from "../store/authStore";
 
@@ -94,6 +94,61 @@ async function patchInventoryQty(id: string, quantity: number) {
   });
   if (!res.ok) throw new Error("Failed to adjust");
   return res.json();
+}
+
+// Generic units-of-measure aren't unique physical pallet tags — exclude them when bulk-copying
+// HU units so the paste target (Outward's HU Unit Entry box) only gets real, searchable codes.
+const GENERIC_HU_VALUES = new Set(["nos", "pallet", "pallets", "box", "boxes", "kg", "kgs"]);
+
+// ── Clipboard helper ─────────────────────────────────────────────────────
+// Works over both secure (navigator.clipboard) and insecure/older browser
+// contexts (execCommand fallback) so "copy HU unit" always works.
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+// ── Copyable HU Unit cell ────────────────────────────────────────────────
+// Click the HU value (or the copy icon) to copy it straight to the
+// clipboard — paste it directly into the "HU Unit Entry" box on the
+// Outward Dispatch page.
+function CopyableHU({ value, copiedKey, activeKey, onCopy }: {
+  value: string; copiedKey: string; activeKey: string | null; onCopy: (key: string, text: string) => void;
+}) {
+  if (!value || value === "—") return <span style={{ color: "#cbd5e1" }}>—</span>;
+  const justCopied = activeKey === copiedKey;
+  return (
+    <span
+      onClick={(e) => { e.stopPropagation(); onCopy(copiedKey, value); }}
+      title="Click to copy HU unit"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: "4px", cursor: "pointer",
+        color: justCopied ? "#059669" : "inherit", fontWeight: justCopied ? 800 : undefined,
+      }}
+    >
+      {justCopied ? <Check size={11} style={{ color: "#059669" }} /> : <Copy size={11} style={{ opacity: 0.45 }} />}
+      {value}
+    </span>
+  );
 }
 
 // ── Inline qty editor cell ─────────────────────────────────────────────────
@@ -774,6 +829,16 @@ export default function InventoryClient() {
   const [selectedItem, setSelectedItem] = useState<EnrichedItem | null>(null);
   const [rectifyItem,  setRectifyItem]  = useState<EnrichedItem | null>(null);
   const [deletingId, setDeletingId]     = useState<string | null>(null);
+  // Which HU Unit cell (or the bulk-copy button) was just clicked — drives the
+  // brief "copied ✓" feedback state before it fades back to the copy icon.
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const handleCopyHU = useCallback((key: string, text: string) => {
+    copyToClipboard(text).then(ok => {
+      if (!ok) return;
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(prev => (prev === key ? null : prev)), 1500);
+    });
+  }, []);
   const [expandedLocs, setExpandedLocs] = useState<Set<string>>(new Set());
   const toggleLoc = (loc: string) => setExpandedLocs(prev => {
     const next = new Set(prev);
@@ -1070,6 +1135,22 @@ export default function InventoryClient() {
 
     return list;
   }, [enriched, view, filterWh, filterType, filterStatus, searchTerm, sortField, sortDir]);
+
+  // Distinct, specific HU unit tags across the currently filtered rows — generic units of
+  // measure ("Nos", "Kg", "Pallet"...) aren't real pallet tags so they're excluded. Feeds the
+  // toolbar "Copy HU Units" button, which puts them on the clipboard one-per-line, ready to
+  // paste straight into the "HU Unit Entry" box on the Outward Dispatch page.
+  const copyableHUUnits = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    filtered.forEach(i => {
+      const v = (i.huUnit || "").trim();
+      if (!v || GENERIC_HU_VALUES.has(v.toLowerCase())) return;
+      const key = v.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); out.push(v); }
+    });
+    return out;
+  }, [filtered]);
 
   const handleDeleteAll = useCallback(async () => {
     if (filtered.length === 0) return;
@@ -1368,7 +1449,7 @@ export default function InventoryClient() {
                               <td style={{ padding: "5px 10px 5px 40px", color: "#cbd5e1", fontSize: "11px" }}>↳</td>
                               <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
                               <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}><CopyableHU value={item.huUnit} copiedKey={`bin-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} /></td>
                               <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
                               <td style={{ padding: "5px 10px" }}>
                                 <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
@@ -1456,7 +1537,7 @@ export default function InventoryClient() {
                               <td style={{ padding: "5px 10px 5px 40px", color: "#7c2d12", fontWeight: 700, fontSize: "10px", whiteSpace: "nowrap" }}>{item.rackBinCode || "—"}</td>
                               <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
                               <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}><CopyableHU value={item.huUnit} copiedKey={`rack-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} /></td>
                               <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
                               <td style={{ padding: "5px 10px" }}>
                                 <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
@@ -1540,7 +1621,7 @@ export default function InventoryClient() {
                               <td style={{ padding: "5px 10px 5px 40px", color: "#cbd5e1", fontSize: "11px" }}>↳</td>
                               <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
                               <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}><CopyableHU value={item.huUnit} copiedKey={`floor-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} /></td>
                               <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
                               <td style={{ padding: "5px 10px" }}>
                                 <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
@@ -1633,6 +1714,24 @@ export default function InventoryClient() {
           </select>
         )}
 
+        {/* Bulk copy HU units — for pasting into Outward Dispatch's HU Unit Entry box */}
+        {copyableHUUnits.length > 0 && (
+          <button
+            onClick={() => handleCopyHU("bulk-hu-units", copyableHUUnits.join("\n"))}
+            title="Copy all HU units in the current view, one per line — paste into Outward Dispatch"
+            style={{
+              display: "flex", alignItems: "center", gap: "6px",
+              padding: "7px 14px", background: copiedKey === "bulk-hu-units" ? "#dcfce7" : "#f5f3ff",
+              border: `1.5px solid ${copiedKey === "bulk-hu-units" ? "#86efac" : "#ddd6fe"}`,
+              borderRadius: "8px", fontSize: "12px", fontWeight: 700,
+              color: copiedKey === "bulk-hu-units" ? "#059669" : "#7c3aed", cursor: "pointer",
+            }}
+          >
+            {copiedKey === "bulk-hu-units" ? <Check size={13} /> : <Copy size={13} />}
+            {copiedKey === "bulk-hu-units" ? `Copied ${copyableHUUnits.length} HU unit${copyableHUUnits.length !== 1 ? "s" : ""}` : `Copy HU Units (${copyableHUUnits.length})`}
+          </button>
+        )}
+
         <span style={{ fontSize: "12px", color: "#94a3b8", fontWeight: 600 }}>
           {filtered.length} record{filtered.length !== 1 ? "s" : ""}
         </span>
@@ -1656,6 +1755,7 @@ export default function InventoryClient() {
                 <th style={thStyle}>Type of Material</th>
                 <th style={thStyle}>HU Unit</th>
                 <th style={thStyle}>Invoice No</th>
+                <th style={thStyle}>Batch No</th>
                 <th style={thStyle}>SAP Doc No</th>
                 <th style={thStyle}>Gate Serial</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Invoice Plt</th>
@@ -1681,12 +1781,12 @@ export default function InventoryClient() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={26} style={{ ...tdStyle, textAlign: "center", padding: "40px", color: "#94a3b8" }}>
+                <tr><td colSpan={27} style={{ ...tdStyle, textAlign: "center", padding: "40px", color: "#94a3b8" }}>
                   <RefreshCw size={20} style={{ animation: "spin 1s linear infinite", margin: "0 auto" }} />
                 </td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={26} style={{ ...tdStyle, textAlign: "center", padding: "48px", color: "#94a3b8" }}>
+                <tr><td colSpan={27} style={{ ...tdStyle, textAlign: "center", padding: "48px", color: "#94a3b8" }}>
                   <Package size={40} style={{ opacity: 0.2, margin: "0 auto 8px" }} />
                   <div style={{ fontWeight: 700, color: "#64748b" }}>No inventory found</div>
                   <div style={{ fontSize: "11px", marginTop: "4px" }}>Commit inward entries to populate inventory</div>
@@ -1751,10 +1851,13 @@ export default function InventoryClient() {
                       {item.materialType || "—"}
                     </td>
                     <td style={{ ...tdStyle, fontSize: "11px", color: "#64748b" }}>
-                      {item.huUnit || "—"}
+                      <CopyableHU value={item.huUnit} copiedKey={`main-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} />
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: "#64748b" }}>
                       {item.invoiceNo !== "—" ? item.invoiceNo : "—"}
+                    </td>
+                    <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: item.batchNumber ? "#374151" : "#cbd5e1" }}>
+                      {item.batchNumber || "—"}
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: item.sapDocNo ? "#374151" : "#cbd5e1" }}>
                       {item.sapDocNo || "—"}
