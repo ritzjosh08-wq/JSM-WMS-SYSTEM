@@ -96,7 +96,7 @@ export default function Inventory() {
   const statuses = useMemo(() => [...new Set(enriched.map(i => i.stockStatus).filter(Boolean))], [enriched]);
 
   const filtered = useMemo(() => {
-    let list = enriched;
+    let list = enriched.filter(i => i.quantity > 0 || i.isDiscrepancy);
     if (view === 'RM') list = list.filter(i => i.category.includes('RM'));
     if (view === 'FG') list = list.filter(i => i.category.includes('FG'));
     if (statusF) list = list.filter(i => i.stockStatus === statusF);
@@ -250,7 +250,7 @@ export default function Inventory() {
         </div>
         <div style={{ padding: '10px 14px', fontSize: 11, color: C.faint, display: 'flex', justifyContent: 'space-between' }}>
           <span>↓ Inward adds to stock · ↑ Outward reduces stock</span>
-          <span>{filtered.length} of {enriched.length} items</span>
+          <span>{filtered.length} of {active.length} items</span>
         </div>
       </Card>
     </div>

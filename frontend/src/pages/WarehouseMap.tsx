@@ -127,6 +127,7 @@ export default function WarehouseMap() {
   const binOccupancy = React.useMemo(() => {
     const map = new Map<string, InventoryBatch[]>();
     inventory.forEach(inv => {
+      if ((inv.quantity ?? 0) <= 0) return;
       const key = inv.binId || inv.floorLocationId;
       if (key) {
         if (!map.has(key)) map.set(key, []);

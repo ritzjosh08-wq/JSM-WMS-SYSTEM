@@ -48,7 +48,7 @@ export default function Login() {
         <div style={{ position: 'absolute', width: 420, height: 420, borderRadius: '50%', background: 'radial-gradient(circle,rgba(59,130,246,.35),transparent 70%)', top: -120, right: -120 }} />
         <div style={{ position: 'relative' }}>
           <div style={{ display: 'inline-block', background: '#fff', borderRadius: 14, padding: '12px 18px', boxShadow: '0 10px 30px rgba(0,0,0,.35)' }}>
-            <img src="/logo.svg" alt="JSM Logistics Pvt Ltd" style={{ height: 40, display: 'block' }} />
+            <img src="/jsm-logo.svg" alt="JSM Logistics Pvt Ltd" style={{ height: 40, display: 'block' }} />
           </div>
           <div style={{ fontSize: 11, color: '#64748b', letterSpacing: '.14em', textTransform: 'uppercase', marginTop: 12 }}>Customer Portal</div>
         </div>
@@ -68,7 +68,7 @@ export default function Login() {
       <div style={{ flex: '1 1 54%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <div className="fade-up" style={{ width: 420, maxWidth: '100%' }}>
           <div className="only-mobile" style={{ justifyContent: 'center', marginBottom: 18 }}>
-            <img src="/logo.svg" alt="JSM Logistics" style={{ height: 40 }} />
+            <img src="/jsm-logo.svg" alt="JSM Logistics" style={{ height: 28 }} />
           </div>
           <h2 style={{ fontSize: 24, fontWeight: 800, color: C.ink, margin: '0 0 6px', letterSpacing: '-.02em' }}>Welcome back</h2>
           <p style={{ fontSize: 14, color: C.faint, margin: '0 0 26px' }}>Sign in to view your stock</p>
@@ -94,7 +94,6 @@ export default function Login() {
             <p style={{ fontSize: 10.5, fontWeight: 700, color: C.faint, margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Demo customer login</p>
             {[
               { user: 'chennaicust', pass: 'chennai123', label: 'Chennai PPD' },
-              { user: 'salemcust', pass: 'salem123', label: 'Salem MAB' },
             ].map(c => (
               <div key={c.user} onClick={() => { setUsername(c.user); setPassword(c.pass); }}
                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', padding: '5px 0', fontSize: 12.5, gap: 8 }}>

@@ -38,13 +38,14 @@ async function getStatsForWarehouse(warehouseId?: string, warehouseCode?: string
     prisma.inwardEntry.findMany({ where: inwardWhere, take: 6, orderBy: { createdAt: 'desc' } }),
   ]);
 
-  let rmPallets = 0, fgPallets = 0, discCount = 0;
+  let rmPallets = 0, fgPallets = 0, discCount = 0, totalQty = 0;
   const locMap: Record<string, number> = {};
   const rmType: Record<string, number> = {};
   const discCat: Record<string, number> = {};
 
   for (const b of allBatches) {
     if (b.quantity <= 0) continue;
+    totalQty += b.quantity;
     let cf: any = {};
     try { cf = JSON.parse(b.customFields || '{}'); } catch {}
     const cat     = (cf.category || '').toUpperCase();
@@ -106,6 +107,7 @@ async function getStatsForWarehouse(warehouseId?: string, warehouseCode?: string
     inventoryRM: Math.round(rmPallets), inventoryFG: Math.round(fgPallets),
     inventoryRMPallets: Math.round(rmPallets), inventoryFGPallets: Math.round(fgPallets),
     totalPallets: stockLocations.reduce((s, l) => s + l.pallets, 0),
+    totalQty: Math.round(totalQty),
     discrepancyCount: discCount, discrepancyByCategory,
     stockLocations, rmByType, binStats,
   };
@@ -113,7 +115,7 @@ async function getStatsForWarehouse(warehouseId?: string, warehouseCode?: string
 
 // ── GET / — main dashboard (optional ?warehouseCode=X filter) ─────────────────
 function mergeStats(list: any[]) {
-  const sumKeys = ['todaysInward','todaysOutward','inventoryRM','inventoryFG','inventoryRMPallets','inventoryFGPallets','totalPallets','discrepancyCount'];
+  const sumKeys = ['todaysInward','todaysOutward','inventoryRM','inventoryFG','inventoryRMPallets','inventoryFGPallets','totalPallets','totalQty','discrepancyCount'];
   const out: any = {};
   for (const k of sumKeys) out[k] = list.reduce((s, x) => s + (x[k] || 0), 0);
   const mergeBy = (arr: any[], key: string, val: string) => {
@@ -141,6 +143,9 @@ router.get('/', async (req, res) => {
       const whs = await prisma.warehouse.findMany({ where: { code: { in: codeList } } });
       const perWh = await Promise.all(whs.map(w => getStatsForWarehouse(w.id, w.code)));
       const merged = mergeStats(perWh);
+      const warehouseBreakdown = whs
+        .map((w, i) => ({ code: w.code, name: w.name, pallets: perWh[i].totalPallets, qty: perWh[i].totalQty }))
+        .sort((a, b) => b.pallets - a.pallets);
       let pending = 0;
       try {
         const _n = new Date();
@@ -155,13 +160,15 @@ router.get('/', async (req, res) => {
           pending = Number(rows[0]?.count ?? 0);
         }
       } catch {}
-      return res.json({ ...merged, pendingCycleCounts: pending });
+      return res.json({ ...merged, warehouseBreakdown, pendingCycleCounts: pending });
     }
 
     let warehouseId: string | undefined;
+    let wcName: string | undefined;
     if (wc) {
       const wh = await prisma.warehouse.findFirst({ where: { code: wc } });
       warehouseId = wh?.id;
+      wcName = wh?.name;
     }
 
     // Pending cycle-count sessions (v2); fall back to legacy model if tables not ready
@@ -204,7 +211,10 @@ router.get('/', async (req, res) => {
       };
     }
 
-    res.json({ ...stats, pendingCycleCounts, binStats });
+    const warehouseBreakdown = wc
+      ? [{ code: wc, name: wcName || wc, pallets: stats.totalPallets, qty: stats.totalQty }]
+      : undefined;
+    res.json({ ...stats, pendingCycleCounts, binStats, warehouseBreakdown });
   } catch (error: any) {
     console.error('[Dashboard]', error);
     res.status(500).json({ error: error.message });

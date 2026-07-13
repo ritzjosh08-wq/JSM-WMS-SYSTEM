@@ -32,8 +32,10 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="shell">
       {/* Sidebar (desktop) */}
       <aside className="sidebar">
-        <div className="sidebar-brand" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
-          <img src="/logo.svg" alt="JSM Logistics Pvt Ltd" style={{ width: 188, maxWidth: '100%', display: 'block' }} />
+        <div className="sidebar-brand" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', boxShadow: '0 4px 14px rgba(0,0,0,.28)', display: 'block', lineHeight: 0, width: '100%', boxSizing: 'border-box' }}>
+            <img src="/jsm-logo.svg" alt="JSM Logistics Pvt Ltd" style={{ width: '100%', height: 'auto', display: 'block' }} />
+          </div>
           <div className="sub" style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.16em', textTransform: 'uppercase', color: '#64748b' }}>Customer Portal · Read-only</div>
         </div>
         <nav className="nav">
@@ -63,7 +65,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <header className="topbar">
           {/* Mobile brand */}
           <div className="only-mobile" style={{ alignItems: 'center', gap: 9 }}>
-            <img src="/logo.svg" alt="JSM Logistics" style={{ height: 24 }} />
+            <img src="/jsm-logo.svg" alt="JSM Logistics" style={{ height: 20 }} />
           </div>
           {/* Scope context (desktop) */}
           <div className="hide-mobile" style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub, fontSize: 13, fontWeight: 600 }}>

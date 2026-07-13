@@ -830,7 +830,7 @@ export default function OutwardClient() {
                               {(cf.category || "RM").toUpperCase()}
                             </span>
                           </td>
-                          <td style={{ padding: "7px 10px", fontFamily: "monospace", fontSize: "11px", color: "#64748b" }}>{batch.batchNumber || "—"}</td>
+                          <td style={{ padding: "7px 10px", fontFamily: "monospace", fontSize: "11px", color: cf.batchNo ? "#374151" : "#94a3b8" }}>{cf.batchNo || "—"}</td>
                           <td style={{ padding: "7px 10px", fontFamily: "monospace", fontSize: "11px", color: "#2563eb", fontWeight: 700 }}>{cf.invoiceNo || "—"}</td>
                           <td style={{ padding: "7px 10px", fontWeight: 700, color: "#7c3aed" }}>{cf.binLocation || "—"}</td>
                           <td style={{ padding: "7px 10px", color: "#374151" }}>{cf.stockLocation || "—"}</td>

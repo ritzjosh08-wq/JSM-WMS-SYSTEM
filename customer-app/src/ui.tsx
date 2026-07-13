@@ -20,6 +20,8 @@ export const IconRefresh = (p: IP) => (<svg {...S(p.size)} style={p.style}><path
 export const IconReports = (p: IP) => (<svg {...S(p.size)} style={p.style}><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="12" y="6" width="3" height="11"/><rect x="17" y="13" width="3" height="4"/></svg>);
 export const IconMap = (p: IP) => (<svg {...S(p.size)} style={p.style}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>);
 export const IconInstall = (p: IP) => (<svg {...S(p.size)} style={p.style}><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>);
+export const IconArrowDownToLine = IconInstall;
+export const IconArrowUpFromLine = (p: IP) => (<svg {...S(p.size)} style={p.style}><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 3h14"/></svg>);
 export const IconLogout = (p: IP) => (<svg {...S(p.size)} style={p.style}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>);
 export const IconChevron = (p: IP) => (<svg {...S(p.size)} style={p.style}><path d="M6 9l6 6 6-6"/></svg>);
 export const IconSearch = (p: IP) => (<svg {...S(p.size)} style={p.style}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>);

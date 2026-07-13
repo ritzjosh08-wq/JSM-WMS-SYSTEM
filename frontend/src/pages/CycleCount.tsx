@@ -260,6 +260,7 @@ export default function CycleCount() {
       const json = await res.json();
       if (!res.ok) return;
 
+      let updatedCheckedBins: any[] = [];
       setSession((prev: any) => {
         if (!prev) return prev;
         let checked: any[] = [...prev.checkedBins];
@@ -273,10 +274,11 @@ export default function CycleCount() {
         const newStatus = json.checkedCount === 0 ? prev.status
           : json.checkedCount < json.totalBins ? (prev.status === 'OVERDUE' ? 'OVERDUE' : 'IN_PROGRESS')
           : prev.status;
+        updatedCheckedBins = checked;
         return { ...prev, checkedBins: checked, status: newStatus };
       });
       setSessions(prev => prev.map(s => s.id === session.id
-        ? { ...s, status: json.checkedCount === 0 ? s.status : json.checkedCount < json.totalBins ? (s.status === 'OVERDUE' ? 'OVERDUE' : 'IN_PROGRESS') : s.status }
+        ? { ...s, checkedBins: updatedCheckedBins, status: json.checkedCount === 0 ? s.status : json.checkedCount < json.totalBins ? (s.status === 'OVERDUE' ? 'OVERDUE' : 'IN_PROGRESS') : s.status }
         : s
       ));
     } finally { setSaving(null); }
@@ -304,7 +306,7 @@ export default function CycleCount() {
       }
       const json = await fetch(`${API}/cycle-count/session/${session.id}`).then(r => r.json());
       setSession(json.session);
-      setSessions(prev => prev.map(s => s.id === session.id ? { ...s, status: 'IN_PROGRESS' } : s));
+      setSessions(prev => prev.map(s => s.id === session.id ? { ...s, checkedBins: json.session.checkedBins, status: json.session.status } : s));
     } finally { setSaving(null); }
   }
 

@@ -26,6 +26,18 @@ router.get('/', async (req, res) => {
       include: { lineItems: true },
       orderBy: { createdAt: 'desc' },
     });
+    // Backfill description from customFields for older line items that predate the
+    // top-level `description` column being written on dispatch.
+    for (const e of entries as any[]) {
+      for (const li of e.lineItems) {
+        if (!li.description) {
+          try {
+            const cf = JSON.parse(li.customFields || '{}');
+            if (cf.description) li.description = cf.description;
+          } catch {}
+        }
+      }
+    }
     res.json(entries);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -98,6 +110,7 @@ router.post('/dispatch', async (req, res) => {
         requiredQty:  line.requiredQty,
         pickedQty:    pick.pickQty,
         warehouseId:  pick.warehouseId,
+        description:  line.description || '',
         customFields: JSON.stringify({
           description:   line.description  || '',
           materialType:  line.materialType || '',
