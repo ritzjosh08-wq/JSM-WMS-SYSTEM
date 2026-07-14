@@ -1172,7 +1172,7 @@ export default function InventoryClient() {
             {selectedWorker ? `${selectedWorker.name}'s Inventory` : 'Inventory'}
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
-            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || 'N/A'} · ` : ''}
+            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || selectedWorker.warehouseCodes?.join(', ') || '—'} · ` : ''}
             Live stock · Updated {lastRefresh.toLocaleTimeString("en-IN")}
           </p>
         </div>

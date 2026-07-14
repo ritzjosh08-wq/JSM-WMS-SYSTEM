@@ -1354,7 +1354,7 @@ export default function InwardClient() {
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             {selectedWorker
-              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || 'N/A'}`
+              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || selectedWorker.warehouseCodes?.join(', ') || '—'}`
               : 'Record goods received at the gate — manually or via Excel upload'}
           </p>
         </div>

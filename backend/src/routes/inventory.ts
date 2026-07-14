@@ -150,6 +150,19 @@ router.patch('/:id', async (req, res) => {
           : null;
 
         if (rackBin) {
+          // ── Rack bin capacity: 1 pallet per slot ──────────────────────────
+          const occupant = await prisma.inventoryBatch.findFirst({
+            where: { binId: rackBin.id, quantity: { gt: 0 } },
+            include: { material: true },
+          });
+          if (occupant && occupant.id !== id) {
+            const occupantCode = occupant.material?.code || 'another pallet';
+            return res.status(400).json({
+              error: `Rack bin "${binCode}" is already occupied by material "${occupantCode}". ` +
+                     `Each rack bin holds exactly one pallet. Choose an empty rack bin.`,
+            });
+          }
+
           updateData.binId           = rackBin.id;
           updateData.rackId          = (rackBin as any).rackId;
           updateData.floorLocationId = null;
