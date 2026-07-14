@@ -132,20 +132,46 @@ router.patch('/:id', async (req, res) => {
       if (binCode) {
         // Find target warehouse
         let targetWarehouseId: string | undefined;
+        let targetWarehouseCode: string = stockLocCode;
         if (stockLocCode) {
           const wh = await prisma.warehouse.findFirst({ where: { code: stockLocCode } });
-          if (wh) targetWarehouseId = wh.id;
+          if (wh) { targetWarehouseId = wh.id; targetWarehouseCode = wh.code; }
+        }
+        if (!targetWarehouseId && current?.warehouseId) {
+          targetWarehouseId = current.warehouseId;
+          targetWarehouseCode = current.warehouse?.code || targetWarehouseCode;
         }
 
-        const floorLoc = await prisma.floorLocation.findFirst({
-          where: { code: binCode, isActive: true, ...(targetWarehouseId ? { warehouseId: targetWarehouseId } : {}) },
-          include: { warehouse: { select: { id: true, code: true } } },
-        });
+        // 1. Check rack bin in target warehouse
+        const rackBin = targetWarehouseId
+          ? await prisma.bin.findFirst({
+              where: { code: binCode, rack: { warehouseId: targetWarehouseId } },
+            })
+          : null;
 
-        if (floorLoc) {
-          updateData.floorLocationId = floorLoc.id;
-          updateData.warehouseId     = floorLoc.warehouseId;
-          updateData.binId           = null; // clear rack bin if now on floor
+        if (rackBin) {
+          updateData.binId           = rackBin.id;
+          updateData.rackId          = (rackBin as any).rackId;
+          updateData.floorLocationId = null;
+          if (targetWarehouseId) updateData.warehouseId = targetWarehouseId;
+        } else {
+          // 2. Check floor location in target warehouse
+          const floorLoc = await prisma.floorLocation.findFirst({
+            where: { code: binCode, isActive: true, ...(targetWarehouseId ? { warehouseId: targetWarehouseId } : {}) },
+            include: { warehouse: { select: { id: true, code: true } } },
+          });
+
+          if (floorLoc) {
+            updateData.floorLocationId = floorLoc.id;
+            updateData.warehouseId     = floorLoc.warehouseId;
+            updateData.binId           = null;
+          } else {
+            // 3. Neither found — reject with a clear error
+            return res.status(400).json({
+              error: `Bin "${binCode}" does not exist in warehouse "${targetWarehouseCode || '?'}". ` +
+                     `Please check the warehouse map before saving.`,
+            });
+          }
         }
       } else {
         // Blank bin = clear location

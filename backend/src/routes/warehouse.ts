@@ -273,6 +273,40 @@ router.get('/layout', async (req, res) => {
   }
 });
 
+// ── GET /api/warehouse/valid-bins?code=CM35 ───────────────────────────
+// Returns all valid bin codes (rack bins + floor locations) for a warehouse.
+// Used by the frontend to validate bin entries in Inward form and highlight
+// invalid bins already stored in Inventory.
+router.get('/valid-bins', async (req, res) => {
+  try {
+    const code = ((req.query.code as string) || '').trim().toUpperCase();
+    if (!code) return res.json({ warehouseCode: '', bins: [] });
+
+    const wh = await prisma.warehouse.findFirst({
+      where: { code },
+      include: {
+        floorLocations: { where: { isActive: true }, select: { code: true } },
+        racks: {
+          where: { isActive: true },
+          include: {
+            bins: { where: { isActive: true }, select: { code: true } },
+          },
+        },
+      },
+    });
+
+    if (!wh) return res.json({ warehouseCode: code, bins: [] });
+
+    const floorCodes = wh.floorLocations.map((f: any) => f.code);
+    const rackBinCodes = wh.racks.flatMap((r: any) => r.bins.map((b: any) => b.code));
+    const bins: string[] = [...new Set([...floorCodes, ...rackBinCodes])];
+
+    res.json({ warehouseCode: wh.code, bins });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ── GET /api/warehouse/list — all warehouses for dropdown ─────────────
 router.get('/list', async (req, res) => {
   try {

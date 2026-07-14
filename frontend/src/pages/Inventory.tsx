@@ -763,6 +763,8 @@ export default function InventoryClient() {
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  // warehouseCode → Set of valid bin codes (rack bins + floor locations)
+  const [validBinsMap, setValidBinsMap] = useState<Record<string, Set<string>>>({});
 
   const [view, setView]             = useState<ViewMode>("ALL");
   const [searchTerm, setSearchTerm] = useState("");
@@ -800,17 +802,30 @@ export default function InventoryClient() {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setRaw(Array.isArray(data.inventory) ? data.inventory : []);
-      setWarehouses(
-        Array.isArray(data.warehouses)
-          ? data.warehouses.filter((w: any) =>
-              !/jsm/i.test(w.name || '') &&
-              !/jsm/i.test(w.code || '') &&
-              !/default/i.test(w.name || '') &&
-              !/^WH-?DEFAULT$/i.test(w.code || '')
-            )
-          : []
+      const invItems: any[] = Array.isArray(data.inventory) ? data.inventory : [];
+      setRaw(invItems);
+      const filteredWarehouses = Array.isArray(data.warehouses)
+        ? data.warehouses.filter((w: any) =>
+            !/jsm/i.test(w.name || '') &&
+            !/jsm/i.test(w.code || '') &&
+            !/default/i.test(w.name || '') &&
+            !/^WH-?DEFAULT$/i.test(w.code || '')
+          )
+        : [];
+      setWarehouses(filteredWarehouses);
+
+      // Fetch valid bins for each unique warehouse and build a lookup map
+      const whCodes = [...new Set(invItems.map((i: any) => i.warehouse?.code).filter(Boolean))] as string[];
+      const entries = await Promise.all(
+        whCodes.map(async (code: string) => {
+          try {
+            const r = await fetch(`${API}/warehouse/valid-bins?code=${encodeURIComponent(code)}`);
+            const d = await r.json();
+            return [code, new Set<string>((d.bins || []).map((b: string) => b.toLowerCase()))] as [string, Set<string>];
+          } catch { return [code, new Set<string>()] as [string, Set<string>]; }
+        })
       );
+      setValidBinsMap(Object.fromEntries(entries));
       setLastRefresh(new Date());
     } catch (e: any) {
       setError(e.message || "Failed to load inventory");
@@ -1697,9 +1712,30 @@ export default function InventoryClient() {
                       {item.receivedNetWeight > 0 ? `${item.receivedNetWeight.toFixed(1)}` : "—"}
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px" }}>
-                      <span style={{ color: item.binLocation !== "—" ? "#2563eb" : "#cbd5e1", fontWeight: item.binLocation !== "—" ? 700 : 400 }}>
-                        {item.binLocation}
-                      </span>
+                      {(() => {
+                        const bin = item.binLocation !== "—" ? item.binLocation : "";
+                        const whCode = item.warehouse?.code || "";
+                        const validSet = validBinsMap[whCode];
+                        const isInvalid = bin && validSet && !validSet.has(bin.toLowerCase());
+                        return (
+                          <span
+                            title={isInvalid ? `"${bin}" is not a valid bin in warehouse ${whCode}` : undefined}
+                            style={{
+                              color: bin
+                                ? (isInvalid ? "#dc2626" : "#2563eb")
+                                : "#cbd5e1",
+                              fontWeight: bin ? 700 : 400,
+                              background: isInvalid ? "#fef2f2" : "transparent",
+                              border: isInvalid ? "1px solid #fecaca" : "none",
+                              borderRadius: isInvalid ? "4px" : "0",
+                              padding: isInvalid ? "1px 5px" : "0",
+                              cursor: isInvalid ? "help" : "default",
+                            }}
+                          >
+                            {bin || "—"}{isInvalid ? " ⚠" : ""}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={{ ...tdStyle, fontSize: "11px", color: item.stockLocation !== "—" ? "#374151" : "#cbd5e1" }}>
                       {item.stockLocation}

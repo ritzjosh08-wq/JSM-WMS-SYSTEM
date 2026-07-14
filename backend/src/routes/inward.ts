@@ -426,17 +426,14 @@ router.post('/commit', async (req, res) => {
             });
 
             if (!floorLoc) {
-              const zone = (row.category || row.materialType || 'GENERAL').toUpperCase().slice(0, 20);
-              floorLoc = await prisma.floorLocation.create({
-                data: {
-                  warehouseId: targetWarehouse.id,
-                  zone,
-                  code: binCode,
-                  capacity: 10000,
-                  isActive: true,
-                },
-              });
-              console.log(`Auto-created floor location: ${binCode} in ${targetWarehouse.code}`);
+              // Bin code does not exist as a rack bin OR a floor location in this warehouse.
+              // Reject — never silently auto-create a bin that isn't on the physical warehouse map.
+              const err: any = new Error(
+                `Bin "${binCode}" does not exist in warehouse "${targetWarehouse.code}". ` +
+                `Please check the warehouse map and verify the bin location for material "${row.materialCode}" before committing.`
+              );
+              err.statusCode = 400;
+              throw err;
             }
 
             resolvedFloorLocationId = floorLoc.id;
@@ -448,6 +445,27 @@ router.post('/commit', async (req, res) => {
         const existing = await prisma.inventoryBatch.findFirst({
           where: { materialId: material.id, batchNumber: batchKey, warehouseId: resolvedWarehouseId },
         });
+
+        // ── Rack bin capacity check ────────────────────────────────────────────
+        // Each rack bin holds exactly ONE pallet. Floor locations have no such limit.
+        // If a different batch already occupies this rack bin slot, reject the commit.
+        if (resolvedBinId) {
+          const occupant = await prisma.inventoryBatch.findFirst({
+            where: { binId: resolvedBinId, quantity: { gt: 0 } },
+            include: { material: true },
+          });
+          // Allow only if the occupant IS the same batch being re-committed (same invoice+material)
+          if (occupant && (!existing || occupant.id !== existing.id)) {
+            const binCode = (row.binLocation || '').trim();
+            const occupantCode = occupant.material?.code || 'another pallet';
+            const err: any = new Error(
+              `Rack bin "${binCode}" is already occupied by material "${occupantCode}". ` +
+              `Each rack bin holds exactly one pallet. Choose an empty rack bin.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+        }
 
         // Merge this row's HU tag AND material type into the batch's running lists of distinct
         // values, instead of overwriting — see notes above invCustomFieldsObj.
@@ -537,7 +555,9 @@ router.post('/commit', async (req, res) => {
     res.json({ success: true, message: "Inward entries committed successfully" });
   } catch (error: any) {
     console.error(error);
-    res.status(500).json({ error: error.message });
+    // 400 for validation errors (e.g. bin not found in warehouse map), 500 for unexpected errors
+    const status = error.statusCode === 400 ? 400 : 500;
+    res.status(status).json({ error: error.message });
   }
 });
 
