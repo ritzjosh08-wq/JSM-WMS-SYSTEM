@@ -1002,6 +1002,8 @@ export default function InventoryClient() {
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  // warehouseCode → Set of valid bin codes (rack bins + floor locations)
+  const [validBinsMap, setValidBinsMap] = useState<Record<string, Set<string>>>({});
 
   const [view, setView]             = useState<ViewMode>("ALL");
   const [searchTerm, setSearchTerm] = useState("");
@@ -1046,17 +1048,30 @@ export default function InventoryClient() {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setRaw(Array.isArray(data.inventory) ? data.inventory : []);
-      setWarehouses(
-        Array.isArray(data.warehouses)
-          ? data.warehouses.filter((w: any) =>
-              !/jsm/i.test(w.name || '') &&
-              !/jsm/i.test(w.code || '') &&
-              !/default/i.test(w.name || '') &&
-              !/^WH-?DEFAULT$/i.test(w.code || '')
-            )
-          : []
+      const invItems: any[] = Array.isArray(data.inventory) ? data.inventory : [];
+      setRaw(invItems);
+      const filteredWarehouses = Array.isArray(data.warehouses)
+        ? data.warehouses.filter((w: any) =>
+            !/jsm/i.test(w.name || '') &&
+            !/jsm/i.test(w.code || '') &&
+            !/default/i.test(w.name || '') &&
+            !/^WH-?DEFAULT$/i.test(w.code || '')
+          )
+        : [];
+      setWarehouses(filteredWarehouses);
+
+      // Fetch valid bins for each unique warehouse and build a lookup map
+      const whCodes = [...new Set(invItems.map((i: any) => i.warehouse?.code).filter(Boolean))] as string[];
+      const entries = await Promise.all(
+        whCodes.map(async (code: string) => {
+          try {
+            const r = await fetch(`${API}/warehouse/valid-bins?code=${encodeURIComponent(code)}`);
+            const d = await r.json();
+            return [code, new Set<string>((d.bins || []).map((b: string) => b.toLowerCase()))] as [string, Set<string>];
+          } catch { return [code, new Set<string>()] as [string, Set<string>]; }
+        })
       );
+      setValidBinsMap(Object.fromEntries(entries));
       setLastRefresh(new Date());
     } catch (e: any) {
       setError(e.message || "Failed to load inventory");
@@ -1421,7 +1436,7 @@ export default function InventoryClient() {
             {selectedWorker ? `${selectedWorker.name}'s Inventory` : 'Inventory'}
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
-            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')} · ` : ''}
+            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || selectedWorker.warehouseCodes?.join(', ') || '—'} · ` : ''}
             Live stock · Updated {lastRefresh.toLocaleTimeString("en-IN")}
           </p>
         </div>
@@ -1571,6 +1586,177 @@ export default function InventoryClient() {
         </div>
       )}
 
+      {/* ── Bin-wise Material Allocation ──────────────────────────────── */}
+      {stockBinAllocation.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+          <div style={{ fontSize: "10px", fontWeight: 800, color: "#0369a1", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Grid3X3 size={12} /> Bin-wise Material Allocation
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+              <thead>
+                <tr>
+                  {[
+                    { h: "BIN",         align: "left"  },
+                    { h: "Material Code", align: "left" },
+                    { h: "Description", align: "left"  },
+                    { h: "HU Unit",     align: "left"  },
+                    { h: "Type",        align: "left"  },
+                    { h: "Category",    align: "left"  },
+                    { h: "Pallets",     align: "right" },
+                    { h: "Net Wt (kg)", align: "right" },
+                    { h: "Qty (Nos)",   align: "right" },
+                  ].map(({ h, align }) => (
+                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {stockBinAllocation.map(({ loc, bins, totalPallets, totalKg, totalItems }, li) => {
+                  const isOpen = expandedLocs.has(loc);
+                  return (
+                    <React.Fragment key={loc}>
+                      {/* ── Stock Location dropdown header ──────────── */}
+                      <tr
+                        onClick={() => toggleLoc(loc)}
+                        style={{ background: "#f0fdf4", cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#dcfce7"}
+                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#f0fdf4"}
+                      >
+                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#059669", borderBottom: isOpen ? "1px solid #d1fae5" : "1px solid #e2e8f0", borderTop: li > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "11px", color: "#059669", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
+                            <span style={{ background: "#059669", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>{loc}</span>
+                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
+                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
+                            </span>
+                          </span>
+                        </td>
+                      </tr>
+                      {/* ── Expanded: bins + material rows ──────────── */}
+                      {isOpen && bins.map(({ bin, pallets, kg, items }, bi) => (
+                        <React.Fragment key={bin}>
+                          <tr style={{ background: "#f0f9ff" }}>
+                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#0369a1", borderBottom: "1px solid #e2e8f0", borderTop: bi > 0 ? "1px dashed #e2e8f0" : "none" }}>
+                              <span style={{ background: "#0369a1", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>{bin}</span>
+                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
+                            </td>
+                          </tr>
+                          {items.map((item, ii) => (
+                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
+                              <td style={{ padding: "5px 10px 5px 40px", color: "#cbd5e1", fontSize: "11px" }}>↳</td>
+                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
+                              <td style={{ padding: "5px 10px" }}>
+                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
+                                  {item.category || "—"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rack-wise Allocation ──────────────────────────────────────── */}
+      {/* Only shows batches actually linked to a real provisioned Rack Bin (see inward.ts
+          commit route) — previously Rack/Row/Level data was never surfaced anywhere, only
+          the flat BIN string above, even when the Excel sheet's BIN column matched a real
+          rack bin code (e.g. "RA1-01"). */}
+      {rackAllocation.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+          <div style={{ fontSize: "10px", fontWeight: 800, color: "#7c2d12", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Grid3X3 size={12} /> Rack-wise Allocation
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+              <thead>
+                <tr>
+                  {[
+                    { h: "Bin",         align: "left"  },
+                    { h: "Material Code", align: "left" },
+                    { h: "Description", align: "left"  },
+                    { h: "HU Unit",     align: "left"  },
+                    { h: "Type",        align: "left"  },
+                    { h: "Category",    align: "left"  },
+                    { h: "Pallets",     align: "right" },
+                    { h: "Net Wt (kg)", align: "right" },
+                    { h: "Qty (Nos)",   align: "right" },
+                  ].map(({ h, align }) => (
+                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rackAllocation.map(({ rack, rows, totalPallets, totalKg, totalItems }, ri) => {
+                  const isOpen = expandedRacks.has(rack);
+                  return (
+                    <React.Fragment key={rack}>
+                      {/* ── Rack dropdown header ──────────── */}
+                      <tr
+                        onClick={() => toggleRack(rack)}
+                        style={{ background: "#fff7ed", cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#ffedd5"}
+                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#fff7ed"}
+                      >
+                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#c2410c", borderBottom: isOpen ? "1px solid #fed7aa" : "1px solid #e2e8f0", borderTop: ri > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "11px", color: "#c2410c", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
+                            <span style={{ background: "#c2410c", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>Rack {rack}</span>
+                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
+                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
+                            </span>
+                          </span>
+                        </td>
+                      </tr>
+                      {/* ── Expanded: rows + bin + material rows ──────────── */}
+                      {isOpen && rows.map(({ row, pallets, kg, items }, rowi) => (
+                        <React.Fragment key={row}>
+                          <tr style={{ background: "#fffbeb" }}>
+                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#b45309", borderBottom: "1px solid #e2e8f0", borderTop: rowi > 0 ? "1px dashed #e2e8f0" : "none" }}>
+                              <span style={{ background: "#b45309", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>Row {row}</span>
+                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
+                            </td>
+                          </tr>
+                          {items.map((item, ii) => (
+                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
+                              <td style={{ padding: "5px 10px 5px 40px", color: "#7c2d12", fontWeight: 700, fontSize: "10px", whiteSpace: "nowrap" }}>{item.rackBinCode || "—"}</td>
+                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.huUnit || "—"}</td>
+                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
+                              <td style={{ padding: "5px 10px" }}>
+                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
+                                  {item.category || "—"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Controls ──────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
@@ -1870,9 +2056,30 @@ export default function InventoryClient() {
                       {item.receivedNetWeight > 0 ? `${item.receivedNetWeight.toFixed(1)}` : "—"}
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px" }}>
-                      <span style={{ color: item.binLocation !== "—" ? "#2563eb" : "#cbd5e1", fontWeight: item.binLocation !== "—" ? 700 : 400 }}>
-                        {item.binLocation}
-                      </span>
+                      {(() => {
+                        const bin = item.binLocation !== "—" ? item.binLocation : "";
+                        const whCode = item.warehouse?.code || "";
+                        const validSet = validBinsMap[whCode];
+                        const isInvalid = bin && validSet && !validSet.has(bin.toLowerCase());
+                        return (
+                          <span
+                            title={isInvalid ? `"${bin}" is not a valid bin in warehouse ${whCode}` : undefined}
+                            style={{
+                              color: bin
+                                ? (isInvalid ? "#dc2626" : "#2563eb")
+                                : "#cbd5e1",
+                              fontWeight: bin ? 700 : 400,
+                              background: isInvalid ? "#fef2f2" : "transparent",
+                              border: isInvalid ? "1px solid #fecaca" : "none",
+                              borderRadius: isInvalid ? "4px" : "0",
+                              padding: isInvalid ? "1px 5px" : "0",
+                              cursor: isInvalid ? "help" : "default",
+                            }}
+                          >
+                            {bin || "—"}{isInvalid ? " ⚠" : ""}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={{ ...tdStyle, fontSize: "11px", color: item.stockLocation !== "—" ? "#374151" : "#cbd5e1" }}>
                       {item.stockLocation}

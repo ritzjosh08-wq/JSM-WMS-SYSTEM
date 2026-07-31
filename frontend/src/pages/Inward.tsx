@@ -157,10 +157,12 @@ const EXCEL_GUIDE = [
 // Form field component
 // ─────────────────────────────────────────────────────────────────────────────
 const Field = ({
-  label, value, onChange, type = "text", placeholder = "", step, required = false, readOnly = false
+  label, value, onChange, type = "text", placeholder = "", step, required = false, readOnly = false,
+  onBlur, hasError = false,
 }: {
   label: string; value: string | number; onChange: (v: string) => void;
   type?: string; placeholder?: string; step?: string; required?: boolean; readOnly?: boolean;
+  onBlur?: () => void; hasError?: boolean;
 }) => (
   <div>
     <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
@@ -170,13 +172,16 @@ const Field = ({
       type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
       placeholder={placeholder}
       step={step}
       readOnly={readOnly}
       className={`w-full border rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition ${
         readOnly
           ? "bg-gray-50 border-gray-200 text-gray-500 cursor-default"
-          : "bg-white border-gray-300 hover:border-gray-400"
+          : hasError
+            ? "bg-red-50 border-red-400 hover:border-red-500"
+            : "bg-white border-gray-300 hover:border-gray-400"
       }`}
     />
   </div>
@@ -734,8 +739,32 @@ const EntryFormModal = ({
 }) => {
   const [form, setForm] = useState<ManualEntry>({ ...entry });
   const [guideOpen, setGuideOpen] = useState(false);
-  const set = (field: keyof ManualEntry) => (val: string | number) =>
+  const [binError, setBinError] = useState<string | null>(null);
+  const set = (field: keyof ManualEntry) => (val: string | number) => {
     setForm((p) => ({ ...p, [field]: val }));
+    // Clear bin error when either bin or stockLocation changes so user can retry
+    if (field === "binLocation" || field === "stockLocation") setBinError(null);
+  };
+
+  // Validate bin against warehouse map when both stockLocation and binLocation are filled
+  const validateBin = async () => {
+    const bin = (form.binLocation || "").trim();
+    const wh  = (form.stockLocation || "").trim().toUpperCase();
+    if (!bin || !wh) { setBinError(null); return; }
+    try {
+      const r = await fetch(`http://localhost:5001/api/warehouse/valid-bins?code=${encodeURIComponent(wh)}`);
+      const d = await r.json();
+      const valid: string[] = d.bins || [];
+      if (valid.length === 0) {
+        // Unknown warehouse — no bins seeded yet, pass-through
+        setBinError(null);
+      } else if (!valid.some((b: string) => b.toLowerCase() === bin.toLowerCase())) {
+        setBinError(`Bin "${bin}" does not exist in warehouse ${wh}. Check the warehouse map.`);
+      } else {
+        setBinError(null);
+      }
+    } catch { setBinError(null); } // network error — don't block the user
+  };
 
   // Auto-TAT
   useEffect(() => {
@@ -835,8 +864,17 @@ const EntryFormModal = ({
             <div className="bg-teal-50/40 rounded-xl p-5 border border-teal-100">
               <SectionHeader icon={<FileText size={15} />} title="Storage" color="green" />
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Stock Location" value={form.stockLocation} onChange={set("stockLocation")} placeholder="e.g. CM35" />
-                <Field label="BIN"            value={form.binLocation}   onChange={set("binLocation")}   placeholder="e.g. J2-03" />
+                <Field label="Stock Location" value={form.stockLocation} onChange={set("stockLocation")} placeholder="e.g. CM35" onBlur={validateBin} />
+                <div>
+                  <Field label="BIN" value={form.binLocation} onChange={set("binLocation")} placeholder="e.g. J2-03"
+                    onBlur={validateBin} hasError={!!binError}
+                  />
+                  {binError && (
+                    <div className="mt-1 flex items-center gap-1 text-red-600 text-xs font-semibold">
+                      <span>⚠</span> {binError}
+                    </div>
+                  )}
+                </div>
                 <Field label="HU Unit"        value={form.huUnit}        onChange={set("huUnit")}        placeholder="e.g. J2-03 / Nos" />
                 <SelectField label="Category" value={form.category}      onChange={set("category")}
                   options={[{ value: "RM", label: "RM – Raw Material" }, { value: "FG", label: "FG – Finished Goods" }]} />
@@ -1453,7 +1491,7 @@ export default function InwardClient() {
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             {selectedWorker
-              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')}`
+              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || selectedWorker.warehouseCodes?.join(', ') || '—'}`
               : 'Record goods received at the gate — manually or via Excel upload'}
           </p>
         </div>

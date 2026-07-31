@@ -587,10 +587,24 @@ router.post('/commit', requireRole('ADMIN', 'WORKER'), async (req, res) => {
             resolvedRackId = matchedBin.rackId;
             resolvedWarehouseId = targetWarehouse.id;
           } else {
-            // Not a recognised rack bin — treat as a floor location as before, auto-creating
-            // if it's new (records any new location entered by any user/worker).
-            const zone = (row.category || row.materialType || 'GENERAL').toUpperCase().slice(0, 20);
-            const floorLoc = await getOrCreateFloorLocation(targetWarehouse.id, binCode, zone);
+            // Not a recognised rack bin — check for an existing floor location. Per the
+            // warehouse-map validation added upstream: never silently auto-create a bin that
+            // isn't on the physical warehouse map (this used to call getOrCreateFloorLocation
+            // and invent a new floor code on the fly, which let typos/unmapped bins slip into
+            // Inventory undetected).
+            const floorLoc = await prisma.floorLocation.findFirst({
+              where: { code: binCode, warehouseId: targetWarehouse.id },
+            });
+
+            if (!floorLoc) {
+              const err: any = new Error(
+                `Bin "${binCode}" does not exist in warehouse "${targetWarehouse.code}". ` +
+                `Please check the warehouse map and verify the bin location for material "${row.materialCode}" before committing.`
+              );
+              err.statusCode = 400;
+              throw err;
+            }
+
             resolvedFloorLocationId = floorLoc.id;
             resolvedWarehouseId = floorLoc.warehouseId;
           }
@@ -603,6 +617,29 @@ router.post('/commit', requireRole('ADMIN', 'WORKER'), async (req, res) => {
         // shows up as its own distinct row in Inventory with its own pallets/kg/nos, instead of
         // being folded into a combined total with other rows of the same material. So there is
         // no "existing batch" to look up or merge into — every row always creates a fresh one.
+
+        // ── Rack bin capacity check ────────────────────────────────────────────
+        // Each rack bin holds exactly ONE pallet. Floor locations have no such limit. Since
+        // consolidation is off (every row is always a brand-new InventoryBatch, never a merge
+        // into an existing one — see note above), there's no "this is the same batch being
+        // re-committed" case to exempt: any occupant at all means the slot is taken.
+        if (resolvedBinId) {
+          const occupant = await prisma.inventoryBatch.findFirst({
+            where: { binId: resolvedBinId, quantity: { gt: 0 } },
+            include: { material: true },
+          });
+          if (occupant) {
+            const binCode = (row.binLocation || '').trim();
+            const occupantCode = occupant.material?.code || 'another pallet';
+            const err: any = new Error(
+              `Rack bin "${binCode}" is already occupied by material "${occupantCode}". ` +
+              `Each rack bin holds exactly one pallet. Choose an empty rack bin.`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
         const rowType = (row.materialType || '').toString().trim();
 
         invCustomFieldsObj.huUnits = rowHU ? [rowHU] : [];
@@ -659,7 +696,9 @@ router.post('/commit', requireRole('ADMIN', 'WORKER'), async (req, res) => {
     res.json({ success: true, message: "Inward entries committed successfully" });
   } catch (error: any) {
     console.error(error);
-    res.status(500).json({ error: error.message });
+    // 400 for validation errors (e.g. bin not found in warehouse map), 500 for unexpected errors
+    const status = error.statusCode === 400 ? 400 : 500;
+    res.status(status).json({ error: error.message });
   }
 });
 

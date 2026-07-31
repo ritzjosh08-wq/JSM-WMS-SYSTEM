@@ -692,7 +692,7 @@ export default function OutwardClient() {
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
             {selectedWorker
-              ? `Dispatching from ${selectedWorker.name}'s warehouse (${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')})`
+              ? `Dispatching from ${selectedWorker.name}'s warehouse (${selectedWorker.warehouseCode || selectedWorker.warehouseCodes?.join(', ') || '—'})`
               : isViewer ? "View dispatch records and inventory movements" : "Enter HU unit codes → Find matching inventory → Select & Confirm Dispatch"}
           </p>
         </div>

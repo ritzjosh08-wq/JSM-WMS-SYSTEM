@@ -75,8 +75,11 @@ export default function Dashboard() {
   const viewTitle = selectedWorker
     ? `${selectedWorker.name}'s Dashboard`
     : 'Operations Dashboard';
+  const whLabel = selectedWorker
+    ? (selectedWorker.warehouseCode || selectedWorker.warehouseCodes?.join(', ') || '—')
+    : null;
   const viewSubtitle = selectedWorker
-    ? `Warehouse: ${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')} · ${selectedWorker.location}`
+    ? `Warehouse: ${whLabel}${selectedWorker.location ? ` · ${selectedWorker.location}` : ''}`
     : new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
   return (
