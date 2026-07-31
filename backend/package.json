@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon src/index.ts",
-    "build": "prisma generate && prisma db push && tsc",
+    "build": "prisma generate && tsc",
+    "migrate:deploy": "prisma migrate deploy",
     "start": "node dist/index.js",
     "postinstall": "prisma generate"
   },
@@ -20,6 +21,8 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.21.0",
     "xlsx": "^0.18.5"

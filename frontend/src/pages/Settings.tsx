@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Users, Shield, Warehouse, Check, RefreshCw, Save, UserPlus, Trash2, Eye, EyeOff, AlertCircle, Database } from 'lucide-react';
 
-const API = 'http://localhost:5001/api';
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
 
 interface UserPermission {
   username: string;

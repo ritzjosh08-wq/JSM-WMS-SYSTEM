@@ -22,12 +22,12 @@ export default function WorkerDropdown() {
   });
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="topbar-worker" style={{ position: 'relative' }}>
       <button onClick={() => setOpen(o => !o)} className="btn"
         style={{ background: selected ? '#eff6ff' : '#fff', color: selected ? C.blueDark : C.sub, border: `1px solid ${selected ? '#bfdbfe' : C.line}`, boxShadow: 'none' }}
         title="Choose which worker's area to view">
         <IconUser size={15} />
-        <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span className="wd-label" style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
         <span style={{ fontSize: 10, fontWeight: 800, color: C.blue, background: '#dbeafe', borderRadius: 999, padding: '1px 7px' }}>{team.length}</span>
         <IconChevron size={14} style={{ color: C.faint, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
       </button>

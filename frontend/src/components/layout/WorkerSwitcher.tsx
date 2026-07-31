@@ -3,6 +3,8 @@ import { useAuthStore } from '../../store/authStore';
 import type { SelectedWorker } from '../../store/authStore';
 import { Users, ChevronDown } from 'lucide-react';
 
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
+
 interface WorkerRecord {
   username: string;
   name: string;
@@ -21,7 +23,7 @@ export default function WorkerSwitcher() {
 
   useEffect(() => {
     if (isCustomer) { setWorkers((user?.team || []) as WorkerRecord[]); return; }
-    fetch('http://localhost:5001/api/auth/workers')
+    fetch(`${API}/auth/workers`)
       .then(r => r.json())
       .then(json => setWorkers(json.workers || []))
       .catch(() => {});

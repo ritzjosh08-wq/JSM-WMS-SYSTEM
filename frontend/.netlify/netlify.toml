@@ -1,0 +1,40 @@
+redirectsOrigin = "config"
+plugins = []
+headers = []
+
+[functions]
+
+[functions."*"]
+
+[build]
+publish = "C:\\Users\\Ritvik\\Downloads\\JSM-LOGISTICS-FINAL-SOFTWARE-main (3)\\JSM-LOGISTICS-FINAL-SOFTWARE-main\\frontend\\dist"
+publishOrigin = "config"
+commandOrigin = "config"
+base = "C:\\Users\\Ritvik\\Downloads\\JSM-LOGISTICS-FINAL-SOFTWARE-main (3)\\JSM-LOGISTICS-FINAL-SOFTWARE-main\\frontend"
+command = "npx vite build"
+
+[build.environment]
+
+[build.processing]
+
+[build.processing.css]
+
+[build.processing.html]
+
+[build.processing.images]
+
+[build.processing.js]
+
+[build.services]
+
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]

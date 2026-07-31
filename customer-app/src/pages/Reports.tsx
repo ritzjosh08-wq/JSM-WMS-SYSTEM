@@ -4,6 +4,7 @@ import {
   parseCF, type InventoryRow, type InwardEntry, type OutwardEntry, type CycleCountRecord,
 } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 // ── inline icons ──────────────────────────────────────────────────────
 const I = (d: React.ReactNode, size = 16, style?: React.CSSProperties) =>
@@ -62,8 +63,8 @@ export default function Reports() {
   const [dateTo, setDateTo] = useState('');
   const [searchQ, setSearchQ] = useState('');
 
-  const loadData = async () => {
-    setFetching(true);
+  const loadData = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setFetching(true);
     try {
       const [invRes, inw, out, ccRes] = await Promise.all([
         fetchInventoryForCodes(codes),
@@ -76,6 +77,7 @@ export default function Reports() {
     finally { setFetching(false); }
   };
   useEffect(() => { loadData(); /* eslint-disable-next-line */ }, [selWorker, allowedCodes.join(',')]);
+  useLiveRefresh(() => loadData({ silent: true }));
 
   const activeCfg = TABS.find(t => t.id === activeTab);
 

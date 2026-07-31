@@ -2,9 +2,12 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { fetchInwardForCodes, type InwardEntry } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { Card, PageHeader, Spinner, EmptyState, StatusBadge, thStyle, tdStyle, fmtDate, C } from '../ui';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 export default function Inward() {
-  const codes = useAuthStore(s => s.allowedCodes);
+  const allowedCodes = useAuthStore(s => s.allowedCodes);
+  const selWorker = useAuthStore(s => s.selectedWorkerCode);
+  const codes = selWorker ? [selWorker] : allowedCodes;
   const [entries, setEntries] = useState<InwardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,7 +25,14 @@ export default function Inward() {
       finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
-  }, [codes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selWorker, allowedCodes.join(',')]);
+
+  // Background poll — new gate entries workers record in the WMS software
+  // appear here without the customer needing to reload.
+  useLiveRefresh(async () => {
+    try { setEntries(await fetchInwardForCodes(codes)); } catch { /* ignore */ }
+  });
 
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();

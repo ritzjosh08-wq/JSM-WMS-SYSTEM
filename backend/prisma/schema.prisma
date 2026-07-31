@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -46,24 +46,30 @@ model Rack {
   rows           RackRow[]
   bins           Bin[]
   inventory      InventoryBatch[]
+
+  @@index([warehouseId])
 }
 
 model RackRow {
   id             String   @id @default(cuid())
   rackId         String
   code           String
-  
+
   rack           Rack     @relation(fields: [rackId], references: [id])
   levels         RackLevel[]
+
+  @@index([rackId])
 }
 
 model RackLevel {
   id             String   @id @default(cuid())
   rowId          String
   code           String
-  
+
   row            RackRow  @relation(fields: [rowId], references: [id])
   bins           Bin[]
+
+  @@index([rowId])
 }
 
 model Bin {
@@ -74,10 +80,14 @@ model Bin {
   capacity       Float
   usedCapacity   Float    @default(0)
   isActive       Boolean  @default(true)
-  
+
   level          RackLevel @relation(fields: [levelId], references: [id])
   rack           Rack      @relation(fields: [rackId], references: [id])
   inventory      InventoryBatch[]
+
+  @@index([levelId])
+  @@index([rackId])
+  @@index([code])
 }
 
 model FloorLocation {
@@ -88,9 +98,12 @@ model FloorLocation {
   capacity       Float
   usedCapacity   Float    @default(0)
   isActive       Boolean  @default(true)
-  
+
   warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
   inventory      InventoryBatch[]
+
+  @@index([warehouseId])
+  @@index([code])
 }
 
 model Material {
@@ -120,16 +133,30 @@ model InventoryBatch {
   floorLocationId String?
   receiptDate     DateTime
   manufacturingDate DateTime?
-  stockStatus     String   
+  stockStatus     String
   lastMovementDate DateTime @default(now())
-  customFields    String?  
+  customFields    String?
 
-  
+
   material        Material   @relation(fields: [materialId], references: [id])
   warehouse       Warehouse  @relation(fields: [warehouseId], references: [id])
   rack            Rack?      @relation(fields: [rackId], references: [id])
   bin             Bin?       @relation(fields: [binId], references: [id])
   floorLocation   FloorLocation? @relation(fields: [floorLocationId], references: [id])
+
+  // Every one of these columns is joined on or filtered by whenever the Inventory list,
+  // Dashboard stats, or bulk Inward commit runs — with no index at all here, Postgres had
+  // to fall back to a full sequential scan for each one, which is fine at dozens of rows
+  // but became a multi-second (and, at real scale, multi-minute) bottleneck once the table
+  // held thousands of rows. These are pure lookup-speed indexes: same data, same results,
+  // no behavior change, just faster.
+  @@index([materialId])
+  @@index([warehouseId])
+  @@index([rackId])
+  @@index([binId])
+  @@index([floorLocationId])
+  @@index([batchNumber])
+  @@index([receiptDate])
 }
 
 model InwardEntry {
@@ -157,6 +184,8 @@ model InwardEntry {
   customFields     String?
 
   lineItems        InwardLineItem[]
+
+  @@index([createdAt])
 }
 
 model InwardLineItem {
@@ -178,6 +207,11 @@ model InwardLineItem {
   
   inwardEntry     InwardEntry @relation(fields: [inwardEntryId], references: [id])
   warehouse       Warehouse   @relation(fields: [warehouseId], references: [id])
+
+  @@index([inwardEntryId])
+  @@index([warehouseId])
+  @@index([materialCode])
+  @@index([batchNumber])
 }
 
 model OutwardEntry {
@@ -191,9 +225,14 @@ model OutwardEntry {
   lrNumber         String?
   remarks          String?
   status           String
+  loaded           Boolean  @default(false)
+  loadedAt         DateTime?
+  loadedBy         String?
   createdAt        DateTime @default(now())
 
   lineItems        OutwardLineItem[]
+
+  @@index([createdAt])
 }
 
 model OutwardLineItem {
@@ -212,6 +251,11 @@ model OutwardLineItem {
 
   outwardEntry    OutwardEntry @relation(fields: [outwardEntryId], references: [id])
   warehouse       Warehouse    @relation(fields: [warehouseId], references: [id])
+
+  @@index([outwardEntryId])
+  @@index([warehouseId])
+  @@index([materialCode])
+  @@index([batchNumber])
 }
 
 model TruckMovement {

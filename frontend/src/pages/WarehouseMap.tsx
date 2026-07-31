@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Info, Layers, Grid3X3, Warehouse } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 
-const API = 'http://localhost:5001/api';
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
 
 // ── CM35 physical floor layout ────────────────────────────────────────
 // Excluded (staging/loading) zones shown as grey dividers

@@ -6,6 +6,7 @@ import {
   IconBox, IconLayers, IconInventory, IconAlert, IconBuilding,
   IconArrowDownToLine, IconArrowUpFromLine, IconChevron,
 } from '../ui';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 // ── KPI card — optionally expandable to show a breakdown popover ───────────────
 function Kpi({
@@ -18,11 +19,11 @@ function Kpi({
   return (
     <div
       className="kpi"
-      style={{ position: 'relative', cursor: clickable ? 'pointer' : 'default' }}
+      style={{ position: 'relative', overflow: 'visible', cursor: clickable ? 'pointer' : 'default' }}
       onClick={clickable ? onToggle : undefined}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-        <div className="chip" style={{ background: bg, color: accent }}><Icon size={19} /></div>
+        <div className="chip" style={{ background: bg, color: accent, position: 'relative', top: 'auto', right: 'auto' }}><Icon size={19} /></div>
         {clickable && (
           <IconChevron size={15} style={{ color: C.faint, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s', marginTop: 2 }} />
         )}
@@ -143,7 +144,14 @@ export default function Dashboard() {
       finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selWorker, allowedCodes.join(',')]);
+
+  // Silent background refresh — no loading spinner flicker, just swaps in fresh
+  // data once it arrives so worker updates in the WMS software show up here.
+  useLiveRefresh(async () => {
+    try { const stats = await fetchDashboardForCodes(codes); setData(stats); } catch { /* ignore */ }
+  });
 
   if (loading) return <Spinner label="Loading your dashboard…" />;
   if (error) return <Card style={{ padding: 20, color: '#b91c1c' }}>Could not load data: {error}</Card>;

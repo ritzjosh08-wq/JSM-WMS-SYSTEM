@@ -1,9 +1,9 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import crypto from 'crypto';
+import { resolveScopedCodes, requireRole } from '../middleware/auth';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const newId = () => crypto.randomUUID();
@@ -35,8 +35,8 @@ async function markOverdue() {
   const today = dateStr(new Date());
   try {
     await prisma.$executeRawUnsafe(
-      `UPDATE DailyCycleSession SET status = 'OVERDUE'
-       WHERE status IN ('PENDING','IN_PROGRESS') AND scheduledDate < ?`,
+      `UPDATE "DailyCycleSession" SET status = 'OVERDUE'
+       WHERE status IN ('PENDING','IN_PROGRESS') AND "scheduledDate" < $1`,
       today
     );
   } catch { /* table may not exist yet */ }
@@ -83,14 +83,14 @@ router.get('/plan/current', async (req, res) => {
     const mondayStr = dateStr(monday);
 
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM WeeklyCycleTask WHERE warehouseId = ? AND weekStart = ? LIMIT 1`,
+      `SELECT * FROM "WeeklyCycleTask" WHERE "warehouseId" = $1 AND "weekStart" = $2 LIMIT 1`,
       warehouseId, mondayStr
     );
     if (!rows.length) return res.json({ plan: null, sessions: [] });
 
     const plan     = rows[0];
     const sessions = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM DailyCycleSession WHERE taskId = ? ORDER BY dayNumber`,
+      `SELECT * FROM "DailyCycleSession" WHERE "taskId" = $1 ORDER BY "dayNumber"`,
       plan.id
     );
     return res.json({ plan, sessions: await parseSessions(sessions) });
@@ -101,22 +101,22 @@ router.get('/plan/current', async (req, res) => {
 
 // ── DELETE /plan/current?warehouseId=X — wipe ALL active plans for a warehouse
 // Clears current week AND any leftover plans from previous weeks for the same warehouse
-router.delete('/plan/current', async (req, res) => {
+router.delete('/plan/current', requireRole('ADMIN', 'WORKER'), async (req, res) => {
   try {
     const warehouseId = String(req.query.warehouseId || '');
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId required' });
 
     // Get ALL active (non-completed) tasks for this warehouse, not just current week
     const tasks = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT id, weekStart FROM WeeklyCycleTask WHERE warehouseId = ? AND status = 'ACTIVE'`,
+      `SELECT id, "weekStart" FROM "WeeklyCycleTask" WHERE "warehouseId" = $1 AND status = 'ACTIVE'`,
       warehouseId
     );
 
     for (const task of tasks) {
-      await prisma.$executeRawUnsafe(`DELETE FROM DailyCycleSession WHERE taskId = ?`, task.id);
+      await prisma.$executeRawUnsafe(`DELETE FROM "DailyCycleSession" WHERE "taskId" = $1`, task.id);
     }
     await prisma.$executeRawUnsafe(
-      `DELETE FROM WeeklyCycleTask WHERE warehouseId = ? AND status = 'ACTIVE'`,
+      `DELETE FROM "WeeklyCycleTask" WHERE "warehouseId" = $1 AND status = 'ACTIVE'`,
       warehouseId
     );
 
@@ -127,7 +127,7 @@ router.delete('/plan/current', async (req, res) => {
 });
 
 // ── POST /plan/generate — create this week's plan ────────────────────────────
-router.post('/plan/generate', async (req, res) => {
+router.post('/plan/generate', requireRole('ADMIN', 'WORKER'), async (req, res) => {
   try {
     const { warehouseId } = req.body;
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId required' });
@@ -138,7 +138,7 @@ router.post('/plan/generate', async (req, res) => {
 
     // Check existing plan
     const existing = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT id FROM WeeklyCycleTask WHERE warehouseId = ? AND weekStart = ? LIMIT 1`,
+      `SELECT id FROM "WeeklyCycleTask" WHERE "warehouseId" = $1 AND "weekStart" = $2 LIMIT 1`,
       warehouseId, mondayStr
     );
     if (existing.length) {
@@ -180,8 +180,8 @@ router.post('/plan/generate', async (req, res) => {
     const taskId     = newId();
 
     await prisma.$executeRawUnsafe(
-      `INSERT INTO WeeklyCycleTask (id, warehouseId, weekStart, totalBins, binsPerDay, status, createdAt)
-       VALUES (?, ?, ?, ?, ?, 'ACTIVE', datetime('now'))`,
+      `INSERT INTO "WeeklyCycleTask" (id, "warehouseId", "weekStart", "totalBins", "binsPerDay", status, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, 'ACTIVE', now()::text)`,
       taskId, warehouseId, mondayStr, totalBins, binsPerDay
     );
 
@@ -195,15 +195,15 @@ router.post('/plan/generate', async (req, res) => {
       const binJson = JSON.stringify(slice);
 
       await prisma.$executeRawUnsafe(
-        `INSERT INTO DailyCycleSession (id, taskId, dayNumber, scheduledDate, binIds, checkedBins, status)
-         VALUES (?, ?, ?, ?, ?, '[]', ?)`,
+        `INSERT INTO "DailyCycleSession" (id, "taskId", "dayNumber", "scheduledDate", "binIds", "checkedBins", status)
+         VALUES ($1, $2, $3, $4, $5, '[]', $6)`,
         newId(), taskId, day, dayStr, binJson, status
       );
     }
 
-    const plan     = (await prisma.$queryRawUnsafe<any[]>(`SELECT * FROM WeeklyCycleTask WHERE id = ?`, taskId))[0];
+    const plan     = (await prisma.$queryRawUnsafe<any[]>(`SELECT * FROM "WeeklyCycleTask" WHERE id = $1`, taskId))[0];
     const sessions = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM DailyCycleSession WHERE taskId = ? ORDER BY dayNumber`, taskId
+      `SELECT * FROM "DailyCycleSession" WHERE "taskId" = $1 ORDER BY "dayNumber"`, taskId
     );
     res.json({ plan, sessions: await parseSessions(sessions) });
   } catch (err: any) {
@@ -215,8 +215,8 @@ router.post('/plan/generate', async (req, res) => {
 router.get('/session/:id', async (req, res) => {
   try {
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT s.*, t.weekStart, t.warehouseId, t.totalBins, t.binsPerDay
-       FROM DailyCycleSession s JOIN WeeklyCycleTask t ON s.taskId = t.id WHERE s.id = ?`,
+      `SELECT s.*, t."weekStart", t."warehouseId", t."totalBins", t."binsPerDay"
+       FROM "DailyCycleSession" s JOIN "WeeklyCycleTask" t ON s."taskId" = t.id WHERE s.id = $1`,
       req.params.id
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
@@ -231,12 +231,12 @@ router.get('/session/:id', async (req, res) => {
 router.get('/session/:id/export-data', async (req, res) => {
   try {
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT s.*, t.weekStart, t.warehouseId, t.totalBins, t.binsPerDay,
-              w.code as warehouseCode, w.name as warehouseName
-       FROM DailyCycleSession s
-       JOIN WeeklyCycleTask t ON s.taskId = t.id
-       JOIN Warehouse w ON t.warehouseId = w.id
-       WHERE s.id = ?`,
+      `SELECT s.*, t."weekStart", t."warehouseId", t."totalBins", t."binsPerDay",
+              w.code as "warehouseCode", w.name as "warehouseName"
+       FROM "DailyCycleSession" s
+       JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
+       JOIN "Warehouse" w ON t."warehouseId" = w.id
+       WHERE s.id = $1`,
       req.params.id
     );
     if (!rows.length) return res.status(404).json({ error: 'Session not found' });
@@ -297,13 +297,13 @@ router.get('/session/:id/export-data', async (req, res) => {
 });
 
 // ── PUT /session/:id/check-bin — toggle a bin's check status ─────────────────
-router.put('/session/:id/check-bin', async (req, res) => {
+router.put('/session/:id/check-bin', requireRole('ADMIN', 'WORKER'), async (req, res) => {
   try {
     const { binId, status, remarks, checkedBy } = req.body;
     // status: 'OK' | 'DISCREPANCY' | 'UNCHECKED'
 
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM DailyCycleSession WHERE id = ?`, req.params.id
+      `SELECT * FROM "DailyCycleSession" WHERE id = $1`, req.params.id
     );
     if (!rows.length) return res.status(404).json({ error: 'Session not found' });
     const session = rows[0];
@@ -325,7 +325,7 @@ router.put('/session/:id/check-bin', async (req, res) => {
     else if (done < totalBins) newStatus = session.status === 'OVERDUE' ? 'OVERDUE' : 'IN_PROGRESS';
 
     await prisma.$executeRawUnsafe(
-      `UPDATE DailyCycleSession SET checkedBins = ?, status = ? WHERE id = ?`,
+      `UPDATE "DailyCycleSession" SET "checkedBins" = $1, status = $2 WHERE id = $3`,
       JSON.stringify(checked), newStatus, req.params.id
     );
 
@@ -336,25 +336,25 @@ router.put('/session/:id/check-bin', async (req, res) => {
 });
 
 // ── POST /session/:id/complete ────────────────────────────────────────────────
-router.post('/session/:id/complete', async (req, res) => {
+router.post('/session/:id/complete', requireRole('ADMIN', 'WORKER'), async (req, res) => {
   try {
     const { completedBy } = req.body;
 
     // Mark this session completed
     await prisma.$executeRawUnsafe(
-      `UPDATE DailyCycleSession SET status = 'COMPLETED', completedAt = datetime('now'), completedBy = ? WHERE id = ?`,
+      `UPDATE "DailyCycleSession" SET status = 'COMPLETED', "completedAt" = now()::text, "completedBy" = $1 WHERE id = $2`,
       completedBy || 'admin', req.params.id
     );
 
     // Check if ALL sessions in the parent task are now completed
     const sessionRow = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT taskId FROM DailyCycleSession WHERE id = ?`, req.params.id
+      `SELECT "taskId" FROM "DailyCycleSession" WHERE id = $1`, req.params.id
     );
     if (sessionRow.length) {
       const { taskId } = sessionRow[0];
       const [total, done] = await Promise.all([
-        prisma.$queryRawUnsafe<any[]>(`SELECT COUNT(*) as c FROM DailyCycleSession WHERE taskId = ?`, taskId),
-        prisma.$queryRawUnsafe<any[]>(`SELECT COUNT(*) as c FROM DailyCycleSession WHERE taskId = ? AND status = 'COMPLETED'`, taskId),
+        prisma.$queryRawUnsafe<any[]>(`SELECT COUNT(*) as c FROM "DailyCycleSession" WHERE "taskId" = $1`, taskId),
+        prisma.$queryRawUnsafe<any[]>(`SELECT COUNT(*) as c FROM "DailyCycleSession" WHERE "taskId" = $1 AND status = 'COMPLETED'`, taskId),
       ]);
       const totalCount = Number(total[0]?.c ?? 0);
       const doneCount  = Number(done[0]?.c ?? 0);
@@ -362,7 +362,7 @@ router.post('/session/:id/complete', async (req, res) => {
       // All 6 sessions done → mark the weekly task as COMPLETED
       if (totalCount > 0 && doneCount >= totalCount) {
         await prisma.$executeRawUnsafe(
-          `UPDATE WeeklyCycleTask SET status = 'COMPLETED', completedAt = datetime('now') WHERE id = ?`,
+          `UPDATE "WeeklyCycleTask" SET status = 'COMPLETED', "completedAt" = now()::text WHERE id = $1`,
           taskId
         );
       }
@@ -381,32 +381,36 @@ router.get('/records', async (req, res) => {
 
     let where = `WHERE t.status = 'COMPLETED'`;
     const params: any[] = [];
-    if (from) { where += ` AND t.weekStart >= ?`; params.push(String(from)); }
-    if (to)   { where += ` AND t.weekStart <= ?`; params.push(String(to)); }
-    const codeList = warehouseCodes
+    if (from) { params.push(String(from)); where += ` AND t."weekStart" >= $${params.length}`; }
+    if (to)   { params.push(String(to));   where += ` AND t."weekStart" <= $${params.length}`; }
+    let codeList = warehouseCodes
       ? String(warehouseCodes).split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
       : (warehouseCode ? [String(warehouseCode).trim().toUpperCase()] : []);
+    codeList = resolveScopedCodes(req, codeList);
     if (codeList.length) {
       const whs = await prisma.warehouse.findMany({ where: { code: { in: codeList } }, select: { id: true } });
       const ids = whs.map(w => w.id);
-      if (ids.length) { where += ` AND t.warehouseId IN (${ids.map(() => '?').join(',')})`; params.push(...ids); }
-      else { where += ` AND 1 = 0`; }
+      if (ids.length) {
+        const placeholders = ids.map((_, i) => `$${params.length + i + 1}`).join(',');
+        where += ` AND t."warehouseId" IN (${placeholders})`;
+        params.push(...ids);
+      } else { where += ` AND 1 = 0`; }
     }
 
     const tasks = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT t.id, t.warehouseId, t.weekStart, t.totalBins, t.binsPerDay, t.status, t.completedAt, t.createdAt,
-              w.code as warehouseCode, w.name as warehouseName
-       FROM WeeklyCycleTask t
-       JOIN Warehouse w ON t.warehouseId = w.id
+      `SELECT t.id, t."warehouseId", t."weekStart", t."totalBins", t."binsPerDay", t.status, t."completedAt", t."createdAt",
+              w.code as "warehouseCode", w.name as "warehouseName"
+       FROM "WeeklyCycleTask" t
+       JOIN "Warehouse" w ON t."warehouseId" = w.id
        ${where}
-       ORDER BY t.completedAt DESC`,
+       ORDER BY t."completedAt" DESC`,
       ...params
     );
 
     // For each task, compute summary stats from all its sessions
     const records = await Promise.all(tasks.map(async (task) => {
       const sessions = await prisma.$queryRawUnsafe<any[]>(
-        `SELECT scheduledDate, status, checkedBins, binIds FROM DailyCycleSession WHERE taskId = ? ORDER BY dayNumber`,
+        `SELECT "scheduledDate", status, "checkedBins", "binIds" FROM "DailyCycleSession" WHERE "taskId" = $1 ORDER BY "dayNumber"`,
         task.id
       );
 
@@ -467,10 +471,10 @@ router.get('/pending', async (_req, res) => {
     await markOverdue();
     const today = dateStr(new Date());
     const rows  = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT s.*, t.weekStart, t.warehouseId FROM DailyCycleSession s
-       JOIN WeeklyCycleTask t ON s.taskId = t.id
-       WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s.scheduledDate <= ?
-       ORDER BY s.scheduledDate ASC`,
+      `SELECT s.*, t."weekStart", t."warehouseId" FROM "DailyCycleSession" s
+       JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
+       WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s."scheduledDate" <= $1
+       ORDER BY s."scheduledDate" ASC`,
       today
     );
     res.json({ sessions: await parseSessions(rows) });
@@ -489,15 +493,15 @@ router.get('/discrepancy-report', async (req, res) => {
     const wcFilter = warehouseCode ? String(warehouseCode).toUpperCase() : null;
     const sessionParams: any[] = wcFilter ? [wcFilter] : [];
     const sessions = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT s.id as sessionId, s.scheduledDate, s.completedAt, s.completedBy,
-              s.binIds, s.checkedBins,
-              t.weekStart, t.warehouseId,
-              w.code as warehouseCode, w.name as warehouseName
-       FROM DailyCycleSession s
-       JOIN WeeklyCycleTask t ON s.taskId = t.id
-       JOIN Warehouse w ON t.warehouseId = w.id
-       ${wcFilter ? 'WHERE w.code = ?' : ''}
-       ORDER BY s.scheduledDate DESC`,
+      `SELECT s.id as "sessionId", s."scheduledDate", s."completedAt", s."completedBy",
+              s."binIds", s."checkedBins",
+              t."weekStart", t."warehouseId",
+              w.code as "warehouseCode", w.name as "warehouseName"
+       FROM "DailyCycleSession" s
+       JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
+       JOIN "Warehouse" w ON t."warehouseId" = w.id
+       ${wcFilter ? 'WHERE w.code = $1' : ''}
+       ORDER BY s."scheduledDate" DESC`,
       ...sessionParams
     );
 
@@ -549,8 +553,8 @@ router.get('/stats', async (_req, res) => {
     await markOverdue();
     const today = dateStr(new Date());
     const rows  = await prisma.$queryRawUnsafe<[{count: any}]>(
-      `SELECT COUNT(*) as count FROM DailyCycleSession
-       WHERE status IN ('PENDING','OVERDUE','IN_PROGRESS') AND scheduledDate <= ?`,
+      `SELECT COUNT(*) as count FROM "DailyCycleSession"
+       WHERE status IN ('PENDING','OVERDUE','IN_PROGRESS') AND "scheduledDate" <= $1`,
       today
     );
     res.json({ pendingCount: Number(rows[0]?.count ?? 0) });

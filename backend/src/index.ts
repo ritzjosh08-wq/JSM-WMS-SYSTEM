@@ -1,19 +1,20 @@
 import express from 'express';
 import cors from 'cors';
-import { PrismaClient } from '@prisma/client';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 
 dotenv.config();
 
-const prisma = new PrismaClient();
+import { prisma } from './lib/prisma';
 const app = express();
 
 // Ensure a Warehouse row exists for every worker's warehouseCode (e.g. SALEM1/2/3)
 async function ensureWorkerWarehouses() {
   try {
-    const usersFile = path.join(__dirname, '../dynamic-users.json');
+    // See the matching DATA_DIR comment in routes/auth.ts — must resolve to the same file.
+    const usersFile = path.join(process.env.DATA_DIR || path.join(__dirname, '..'), 'dynamic-users.json');
     const dynamic: any[] = fs.existsSync(usersFile) ? JSON.parse(fs.readFileSync(usersFile, 'utf-8')) : [];
     // .trim() BEFORE .toUpperCase() is required here: every other place that resolves a
     // warehouse by code (inward.ts's per-row/per-invoice resolver, auth.ts's new-user
@@ -60,7 +61,7 @@ async function runMigrations() {
         "totalBins"   INTEGER NOT NULL DEFAULT 0,
         "binsPerDay"  INTEGER NOT NULL DEFAULT 0,
         "status"      TEXT NOT NULL DEFAULT 'ACTIVE',
-        "createdAt"   TEXT NOT NULL DEFAULT (datetime('now'))
+        "createdAt"   TEXT NOT NULL DEFAULT (now()::text)
       )`);
     await prisma.$executeRawUnsafe(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_wct_wh_week ON "WeeklyCycleTask"("warehouseId","weekStart")`);
@@ -153,11 +154,30 @@ runMigrations().then(ensureWorkerWarehouses);
 // which is fine for local dev but should be set once you know your real deployed
 // frontend URL(s) — see the deployment guide.
 const corsOrigins = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors(corsOrigins.length ? { origin: corsOrigins } : {}));
-// Raise body limit so large inward-commit payloads don't trip Express's default
-// 100kb limit (which returns an HTML error page -> "Unexpected token '<'").
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// A worker-facing build deployed via Cloudflare Pages (see WORKER-LAPTOP-SETUP.md) gets a
+// *.pages.dev URL that isn't known until AFTER the project is created in Cloudflare's
+// dashboard — allowing the whole suffix means that link works immediately without this
+// file needing to be edited (and the backend restarted) every time a new Pages project or
+// preview URL is created. This is additive only: every origin in CORS_ORIGIN above is
+// still allowed exactly as before.
+const ALLOWED_ORIGIN_SUFFIXES = ['.pages.dev'];
+app.use(cors((corsOrigins.length || ALLOWED_ORIGIN_SUFFIXES.length) ? {
+  origin(origin, callback) {
+    if (!origin) return callback(null, true); // non-browser callers (curl, health checks) send no Origin header
+    if (corsOrigins.includes(origin)) return callback(null, true);
+    if (ALLOWED_ORIGIN_SUFFIXES.some(suffix => origin.endsWith(suffix))) return callback(null, true);
+    callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
+} : {}));
+// Standard security headers (helmet). crossOriginResourcePolicy/contentSecurityPolicy are
+// disabled here because this is a pure JSON API consumed by separate frontend origins (not
+// serving HTML/assets itself) — the defaults are meant for apps that also serve web pages.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+// Raise body limit so large inward-commit payloads (and base64-encoded Excel
+// uploads, which run ~33% bigger than the raw file) don't trip Express's
+// default 100kb limit (which returns an HTML error page -> "Unexpected token '<'").
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 import inwardRouter from './routes/inward';
 import dashboardRouter from './routes/dashboard';
@@ -167,6 +187,7 @@ import outwardRouter from './routes/outward';
 import materialsRouter from './routes/materials';
 import authRouter from './routes/auth';
 import warehouseRouter from './routes/warehouse';
+import damageRouter from './routes/damage';
 import { requireAuth } from './middleware/auth';
 
 // /api/auth is mounted WITHOUT a blanket requireAuth here because it hosts the public
@@ -183,11 +204,12 @@ app.use('/api/outward', requireAuth, outwardRouter);
 app.use('/api/materials', requireAuth, materialsRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/warehouse', requireAuth, warehouseRouter);
+app.use('/api/damage', requireAuth, damageRouter);
 
 // ── JSON parse error handler — returns JSON instead of Express HTML 400/413 pages ──
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'Request payload too large. Maximum size is 25MB.' });
+    return res.status(413).json({ error: 'Request payload too large. Maximum size is 100MB.' });
   }
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON in request body.' });
@@ -196,21 +218,26 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-// ── JSON parse error handler — returns JSON instead of Express HTML 400/413 pages ──
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (err.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'Request payload too large. Maximum size is 25MB.' });
+// Basic health check — actually pings the configured database instead of a hardcoded label
+app.get('/api/health', async (req, res) => {
+  try {
+    await prisma.$queryRawUnsafe('SELECT 1');
+    res.json({ status: 'ok', database: 'PostgreSQL connected' });
+  } catch (e: any) {
+    res.status(500).json({ status: 'error', database: 'disconnected', error: e.message });
   }
-  if (err.type === 'entity.parse.failed') {
-    return res.status(400).json({ error: 'Invalid JSON in request body.' });
-  }
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-// Basic health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', database: 'PostgreSQL connected' });
+// Plain /health (no /api prefix) — for hosting-platform health checks (Render, load
+// balancers, uptime monitors) that probe a conventional path. Same DB ping as /api/health
+// above; kept as a separate route rather than a redirect so it works with HEAD requests too.
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRawUnsafe('SELECT 1');
+    res.json({ status: 'ok' });
+  } catch (e: any) {
+    res.status(500).json({ status: 'error' });
+  }
 });
 
 // Any unmatched /api route returns JSON (never HTML) so the client's res.json() never chokes.

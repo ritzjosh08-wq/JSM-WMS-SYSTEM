@@ -17,10 +17,10 @@ export default function Login() {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      const user = await login(username, password);
+      const { user, token } = await login(username, password);
       if (user.role !== 'CUSTOMER' && user.role !== 'ADMIN') throw new Error('This portal is for customer accounts only.');
       const codes = await resolveAllowedWarehouseCodes(user);
-      setSession(user, codes);
+      setSession(user, codes, token);
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -47,8 +47,9 @@ export default function Login() {
       }}>
         <div style={{ position: 'absolute', width: 420, height: 420, borderRadius: '50%', background: 'radial-gradient(circle,rgba(59,130,246,.35),transparent 70%)', top: -120, right: -120 }} />
         <div style={{ position: 'relative' }}>
-          <div style={{ display: 'inline-block', background: '#fff', borderRadius: 14, padding: '12px 18px', boxShadow: '0 10px 30px rgba(0,0,0,.35)' }}>
-            <img src="/jsm-logo.svg" alt="JSM Logistics Pvt Ltd" style={{ height: 40, display: 'block' }} />
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, background: '#fff', borderRadius: 14, padding: '10px 18px', boxShadow: '0 10px 30px rgba(0,0,0,.35)' }}>
+            <img src="/Logo.png" alt="" style={{ height: 34, display: 'block' }} />
+            <img src="/jsm-logo.svg" alt="JSM Logistics Pvt Ltd" style={{ height: 30, display: 'block' }} />
           </div>
           <div style={{ fontSize: 11, color: '#64748b', letterSpacing: '.14em', textTransform: 'uppercase', marginTop: 12 }}>Customer Portal</div>
         </div>
@@ -67,8 +68,9 @@ export default function Login() {
       {/* Form panel */}
       <div style={{ flex: '1 1 54%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <div className="fade-up" style={{ width: 420, maxWidth: '100%' }}>
-          <div className="only-mobile" style={{ justifyContent: 'center', marginBottom: 18 }}>
-            <img src="/jsm-logo.svg" alt="JSM Logistics" style={{ height: 28 }} />
+          <div className="only-mobile" style={{ justifyContent: 'center', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+            <img src="/Logo.png" alt="" style={{ height: 26 }} />
+            <img src="/jsm-logo.svg" alt="JSM Logistics" style={{ height: 24 }} />
           </div>
           <h2 style={{ fontSize: 24, fontWeight: 800, color: C.ink, margin: '0 0 6px', letterSpacing: '-.02em' }}>Welcome back</h2>
           <p style={{ fontSize: 14, color: C.faint, margin: '0 0 26px' }}>Sign in to view your stock</p>
@@ -89,21 +91,6 @@ export default function Login() {
           </form>
 
           <InstallButton variant="primary" />
-
-          <div style={{ marginTop: 24, background: '#f8fafc', border: `1px solid ${C.line}`, borderRadius: 12, padding: '14px 16px' }}>
-            <p style={{ fontSize: 10.5, fontWeight: 700, color: C.faint, margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Demo customer login</p>
-            {[
-              { user: 'chennaicust', pass: 'chennai123', label: 'Chennai PPD' },
-            ].map(c => (
-              <div key={c.user} onClick={() => { setUsername(c.user); setPassword(c.pass); }}
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', padding: '5px 0', fontSize: 12.5, gap: 8 }}>
-                <span style={{ color: C.blue, fontWeight: 700, minWidth: 110 }}>{c.user}</span>
-                <span style={{ color: C.sub, flex: 1 }}>{c.label}</span>
-                <span style={{ color: C.faint, fontFamily: 'ui-monospace, monospace' }}>{c.pass}</span>
-              </div>
-            ))}
-            <p style={{ fontSize: 10.5, color: C.faint, marginTop: 6 }}>Click a row to auto-fill. Accounts are managed in the WMS.</p>
-          </div>
         </div>
       </div>
     </div>

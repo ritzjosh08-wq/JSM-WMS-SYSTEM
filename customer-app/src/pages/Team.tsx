@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fetchTeam, type TeamWorkerStats } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { Card, PageHeader, Spinner, EmptyState, C } from '../ui';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 function Stat({ label, value, color }: { label: string; value: number; color: string }) {
   return (
@@ -33,6 +34,16 @@ export default function Team() {
     })();
     return () => { alive = false; };
   }, [user]);
+
+  // Background poll — worker activity stats stay current without a manual reload.
+  useLiveRefresh(async () => {
+    try {
+      const locations = user?.allowedLocations?.length
+        ? user.allowedLocations
+        : (user?.location ? [user.location] : []);
+      setTeam(await fetchTeam(locations));
+    } catch { /* ignore */ }
+  });
 
   if (loading) return <Spinner label="Loading your team…" />;
   if (error) return <Card style={{ padding: 20, color: '#b91c1c' }}>Could not load team: {error}</Card>;

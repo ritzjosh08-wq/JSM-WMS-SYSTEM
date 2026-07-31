@@ -1,8 +1,8 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
+import { resolveScopedCodes, FORBIDDEN_CODE } from '../middleware/auth';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // ── CM35 bin data (parsed from CM35 BIN LOCATION RACK & FLOOR.xlsx) ──
 const FLOOR_CONFIG: {zone:string;code:string}[] = [
@@ -232,6 +232,14 @@ async function ensureFG05Seeded(): Promise<string> {
 router.get('/layout', async (req, res) => {
   try {
     const warehouseCode = (req.query.warehouse as string || 'CM35').toUpperCase();
+
+    // Server-side enforcement: a CUSTOMER/WORKER may only view the layout of a
+    // warehouse within their own scope — never trust the client-supplied code alone.
+    const scoped = resolveScopedCodes(req, [warehouseCode]);
+    if (scoped.includes(FORBIDDEN_CODE)) {
+      return res.status(403).json({ error: 'You do not have access to this warehouse' });
+    }
+
     const warehouseId = warehouseCode === 'FG05'
       ? await ensureFG05Seeded()
       : await ensureCM35Seeded();

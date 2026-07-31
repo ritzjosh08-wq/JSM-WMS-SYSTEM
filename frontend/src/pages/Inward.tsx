@@ -3,13 +3,17 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Plus, Upload, CheckCircle2, AlertCircle, Database, RefreshCw,
-  Trash2, ClipboardList, ChevronDown, ChevronUp,
+  Trash2, ClipboardList, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   CheckSquare, XCircle, TriangleAlert, Save, BookOpen, Zap,
-  ArrowRight, FileText, X
+  ArrowRight, FileText, X, MapPin
 } from "lucide-react";
 import { useAuthStore } from "../store/authStore";
+
+const API = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
+
 export interface ManualEntryPayload {
   date: string; gateSerialNo: string; source: string; invoiceNumber: string; sapDocumentNumber: string;
+  batchNo: string;
   lrNumber: string; sealNumber: string; truckNumber: string; transporter: string; category: string;
   stockLocation: string; truckInTime: string; unloadStartTime: string; unloadEndTime: string; truckOutTime: string;
   tat: string; tatRemarks: string; materialCode: string; description: string; huUnit: string; actualHuUnit: string;
@@ -21,7 +25,7 @@ export interface ManualEntryPayload {
 }
 
 async function commitInwardEntries(entries: ManualEntryPayload[], createdBy: string) {
-  const res = await fetch('http://localhost:5001/api/inward/commit', {
+  const res = await fetch(`${API}/inward/commit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ entries, createdBy })
@@ -46,6 +50,7 @@ const EMPTY_ENTRY: Omit<ManualEntry, "id"> = {
   status: "APPROVED",
   date: (() => { const d = new Date(); return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`; })(),
   gateSerialNo: "", source: "", invoiceNumber: "", sapDocumentNumber: "",
+  batchNo: "",
   lrNumber: "", sealNumber: "", truckNumber: "", transporter: "",
   category: "RM", stockLocation: "",
   truckInTime: "", unloadStartTime: "", unloadEndTime: "", truckOutTime: "",
@@ -82,6 +87,7 @@ const EXCEL_COL_MAP: { header: string; field: keyof typeof EMPTY_ENTRY | "__shor
   { header: "Date",                  field: "date"                },
   { header: "Source",                field: "source"              },
   { header: "Invoice No",            field: "invoiceNumber"       },
+  { header: "Batch No",              field: "batchNo"             },
   { header: "SAP Doc No",            field: "sapDocumentNumber"   },
   { header: "Materials Code",        field: "materialCode"        },
   { header: "Description",           field: "description"         },
@@ -116,6 +122,7 @@ const EXCEL_GUIDE = [
   { col: "Date",                   field: "Date"                   },
   { col: "Source",                 field: "Source"                 },
   { col: "Invoice No",             field: "Invoice No"             },
+  { col: "Batch No",               field: "Batch No"               },
   { col: "SAP Doc No",             field: "SAP Doc No"             },
   { col: "Materials Code",         field: "Materials Code"         },
   { col: "Description",            field: "Description"            },
@@ -511,13 +518,14 @@ const DiscrepancyPanel = ({ entry, onUpdate, onMarkDiscrepancy }: {
 // Entry Row (list item)
 // ─────────────────────────────────────────────────────────────────────────────
 const EntryRow = ({
-  entry, index, onEdit, onDelete, onStatusChange, onUpdateField, isDupeHU, isViewer
+  entry, index, onEdit, onDelete, onStatusChange, onUpdateField, isDupeHU, isDupeRackBin, isViewer
 }: {
   entry: ManualEntry; index: number;
   onEdit: () => void; onDelete: () => void;
   onStatusChange: (s: ManualEntry["entryStatus"]) => void;
   onUpdateField: (field: keyof ManualEntry, val: string | number) => void;
   isDupeHU?: boolean;
+  isDupeRackBin?: boolean;
   isViewer?: boolean;
 }) => {
   const [expanded, setExpanded] = useState(false);
@@ -639,6 +647,11 @@ const EntryRow = ({
           {isDupeHU && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-700 border border-orange-300 whitespace-nowrap">
               ⚠ Duplicate HU
+            </span>
+          )}
+          {isDupeRackBin && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-300 whitespace-nowrap">
+              ⚠ Rack Bin Full
             </span>
           )}
           <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide border ${cfg.bg} ${cfg.text} ${cfg.border}`}>
@@ -798,11 +811,12 @@ const EntryFormModal = ({
           {/* ── Row 1: Gate Entry */}
           <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
             <SectionHeader icon={<FileText size={15} />} title="Gate Entry" />
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
               <Field label="Gate Serial No"  value={form.gateSerialNo}       onChange={set("gateSerialNo")}       placeholder="e.g. 253" />
               <Field label="Date"            type="text" value={form.date}   onChange={set("date")}  placeholder="e.g. 12-06-2026"  required />
               <Field label="Source"          value={form.source}             onChange={set("source")}             placeholder="e.g. TVT" />
               <Field label="Invoice No"      value={form.invoiceNumber}      onChange={set("invoiceNumber")}      placeholder="H33A126..." required />
+              <Field label="Batch No"        value={form.batchNo}            onChange={set("batchNo")}            placeholder="e.g. B12345" />
               <Field label="SAP Doc No"      value={form.sapDocumentNumber}  onChange={set("sapDocumentNumber")}  placeholder="4905927..." />
             </div>
           </div>
@@ -982,6 +996,31 @@ export default function InwardClient() {
   const [dupeError, setDupeError] = useState<string | null>(null);
   const [stagingPrompt, setStagingPrompt] = useState<{ count: number; resolve: (yes: boolean) => void } | null>(null);
   const [statusFilter, setStatusFilter] = useState<"ALL" | ManualEntry["entryStatus"]>("ALL");
+  // Real, provisioned rack bin codes (e.g. "RH1-24") — fetched once so the rack-capacity
+  // check below can tell an actual rack bin apart from a floor location code that merely
+  // happens to be entered under warehouse "CM35". Without this, any code under CM35 was
+  // being treated as a rack bin, which wrongly blocked floor spots that legitimately hold
+  // more than one pallet.
+  const [rackBinCodes, setRackBinCodes] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    fetch(`${API}/warehouse/layout?warehouse=CM35`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.racks) return;
+        const codes = new Set<string>();
+        for (const rack of data.racks) {
+          for (const row of (rack.rows || [])) {
+            for (const level of (row.levels || [])) {
+              for (const bin of (level.bins || [])) {
+                if (bin.code) codes.add(String(bin.code).trim().toUpperCase());
+              }
+            }
+          }
+        }
+        setRackBinCodes(codes);
+      })
+      .catch(() => {});
+  }, []);
 
   // ── Staging area ask helper — shows modal, returns promise ──────────────
   const askStaging = (count: number): Promise<boolean> =>
@@ -1001,6 +1040,22 @@ export default function InwardClient() {
     return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([key]) => key));
   }, [entries]);
 
+  // ── Duplicate rack bin detection — a real rack bin (e.g. RH1-24) physically holds exactly
+  // ONE pallet each (unlike floor locations, where several pallets legitimately share one
+  // floor spot). Many bin codes entered under warehouse "CM35" are actually floor codes, not
+  // rack bins (CM35 has both) — so this must check the entry's Bin code against the real,
+  // provisioned rack bin list (rackBinCodes), NOT just "is this row's warehouse CM35". Only
+  // rows whose binLocation matches an actual rack bin are subject to the 1-pallet limit;
+  // everything else (floor spots, whatever warehouse they're under) is left alone.
+  const duplicateRackBins = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of entries) {
+      const bin = (e.binLocation || '').trim().toUpperCase();
+      if (bin && rackBinCodes.has(bin)) counts.set(bin, (counts.get(bin) || 0) + 1);
+    }
+    return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([key]) => key));
+  }, [entries, rackBinCodes]);
+
   // ── Counts
   const pending     = entries.filter((e) => e.entryStatus === "PENDING").length;
   const approved    = entries.filter((e) => e.entryStatus === "APPROVED").length;
@@ -1009,6 +1064,33 @@ export default function InwardClient() {
 
   // ── Filtered view — driven by clicking a stat card (Total/Pending/Approved/Discrepancy/Rejected)
   const filteredEntries = statusFilter === "ALL" ? entries : entries.filter((e) => e.entryStatus === statusFilter);
+
+  // ── Pagination — a real warehouse Excel import can bring in thousands of rows at once
+  // (e.g. a daily stock sheet), and this list used to render one full EntryRow per entry with
+  // no limit at all. Each EntryRow is a fairly heavy component (diff badges, dupe-detection
+  // styling, inline-editable fields), so rendering thousands of them into the DOM in one shot
+  // froze the tab — the browser churning on that giant render is what "the software is lagging"
+  // was actually caused by, not database or API slowness. Slicing the (already-filtered) list
+  // down to one page's worth caps how many EntryRows ever exist in the DOM at once; everything
+  // else about each row (editing, status, delete) is completely unchanged.
+  const ENTRIES_PAGE_SIZE = 100;
+  const [entriesPage, setEntriesPage] = useState(1);
+  const totalEntriesPages = Math.max(1, Math.ceil(filteredEntries.length / ENTRIES_PAGE_SIZE));
+  // Clamp back onto a valid page whenever the filtered set shrinks (e.g. switching filters,
+  // deleting rows) so you're never stuck looking at a blank page N of a now-shorter list.
+  useEffect(() => {
+    if (entriesPage > totalEntriesPages) setEntriesPage(totalEntriesPages);
+  }, [totalEntriesPages, entriesPage]);
+  // Switching which status filter is active (e.g. Total -> Pending) means the pages are now
+  // counting a different, unrelated set of rows — always land back on page 1 rather than
+  // whatever page number happened to be selected before.
+  useEffect(() => {
+    setEntriesPage(1);
+  }, [statusFilter]);
+  const pagedEntries = filteredEntries.slice(
+    (entriesPage - 1) * ENTRIES_PAGE_SIZE,
+    entriesPage * ENTRIES_PAGE_SIZE
+  );
 
   const handleAddEntry = (entry: ManualEntry) => {
     setDupeError(null);
@@ -1094,22 +1176,30 @@ export default function InwardClient() {
   //
   // Optional: add a column with header "HU Unit" anywhere in the sheet.
   // It will be auto-detected by header name. If absent, BIN (col 11) is used as the HU identifier.
+  // Optional: add a column with header "Batch No" anywhere in the sheet — auto-detected by
+  // header name (not position), so it can be added in any column without disturbing the rest.
+  // This is the real manufacturer/production batch number, kept separate from Invoice No.
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setSmartUploading(true); setSmartError(null); setSmartImported(0); setSmartBlankSkipped(0); setSmartTotalRows(0);
     try {
-      // Send file to backend for Excel parsing (avoids timezone/date issues in frontend JS)
-      const arrayBuf = await file.arrayBuffer();
-      // Chunk-based btoa — avoids "Maximum call stack size exceeded" on large files
-      const bytes = new Uint8Array(arrayBuf);
-      let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
-      const base64 = btoa(binary);
-      const parseRes = await fetch('http://localhost:5001/api/inward/parse-excel', {
+      // Send file to backend for Excel parsing (avoids timezone/date issues in frontend JS).
+      // Base64-encode via FileReader.readAsDataURL rather than a manual byte-by-byte loop +
+      // btoa(): the old loop built up one giant JS string by repeated concatenation (tens of
+      // millions of characters for a ~50MB warehouse export) entirely on the main thread,
+      // freezing the whole tab for several seconds on every large upload — a real contributor
+      // to "the app is lagging," not just the entries list below. readAsDataURL does the same
+      // encoding using the browser's native (non-blocking, far faster) implementation; the
+      // result just needs the "data:...;base64," prefix stripped off. Output is byte-for-byte
+      // the same base64 string as before.
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1] || '');
+        reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+      const parseRes = await fetch(`${API}/inward/parse-excel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileBase64: base64, fileName: file.name }),
@@ -1140,13 +1230,38 @@ export default function InwardClient() {
         // Case-insensitive column lookup on backend-returned objects
         const rowLower: Record<string, any> = {};
         Object.keys(row).forEach(k => { rowLower[k.toLowerCase().trim().replace(/\s+/g,' ')] = row[k]; });
-        const col = (name: string): any => rowLower[name.toLowerCase().trim().replace(/\s+/g,' ')];
+        // col() now accepts multiple candidate header names and returns the first one that
+        // actually has a value. The exact template header (e.g. "Materials Code") is always
+        // listed first so nothing changes for sheets already using the standard template —
+        // the extra names are fallbacks for real-world sheets that use slightly different
+        // wording for the same field (e.g. "Material Code", "HU No", "Rack Location", "Gate
+        // Entry", "Rec Date"). Before this, any column name not matching EXACTLY meant that
+        // field silently came through blank for every row.
+        const col = (...names: string[]): any => {
+          for (const n of names) {
+            const v = rowLower[n.toLowerCase().trim().replace(/\s+/g, ' ')];
+            if (v !== undefined && v !== null && v !== '') return v;
+          }
+          return undefined;
+        };
 
-        const invPallets  = toNum(col("Invoice Qty in Pallet"));
-        const invNos      = toNum(col("Invoice Qty in Nos"));
-        const rcvPallets  = toNum(col("Received Qty In Pallets"));
+        // "Received Qty" (a real shipment's received amount) and "Closing/Available" (a stock
+        // snapshot's current on-hand amount) are different concepts on paper, but for the
+        // purpose of establishing what's actually sitting in the warehouse right now, they
+        // resolve to the same number — the fallbacks here only kick in when the sheet has no
+        // real "Received Qty" column at all (i.e. it's a stock-take sheet, not a shipment log).
+        const rcvPallets  = toNum(col("Received Qty In Pallets", "Closing", "Available Pallets"));
         const rcvNos      = toNum(col("Received Qty In Nos"));
-        const netWt       = toNum(col("Net Weight in Kg"));
+        const netWt       = toNum(col("Net Weight in Kg", "Available Qty in Kgs", "Qty2"));
+
+        // A stock-take/snapshot sheet has no "Invoice Qty" columns at all (there's no shipment
+        // to compare against) — for those, treat invoice == received so the discrepancy check
+        // below doesn't flag every single row as a false "short/excess" just because there was
+        // nothing to reconcile against. A real shipment sheet's own Invoice Qty columns (when
+        // present) are used exactly as before.
+        const hasInvoiceQtyCols = col("Invoice Qty in Pallet") !== undefined || col("Invoice Qty in Nos") !== undefined;
+        const invPallets  = hasInvoiceQtyCols ? toNum(col("Invoice Qty in Pallet")) : rcvPallets;
+        const invNos      = hasInvoiceQtyCols ? toNum(col("Invoice Qty in Nos"))    : rcvNos;
 
         // Short/Excess: fall back to computing from invoice vs received quantities
         const rawShortPlt = col("Short in Pallet");
@@ -1158,10 +1273,20 @@ export default function InwardClient() {
                               : String(rawShortKg  ?? "").startsWith("=") ? (invNos - rcvNos)
                               : toNum(rawShortKg);
 
-        const binVal    = toStr(col("BIN"));
-        // HU Unit: only use the explicit "HU Unit" column. BIN is a storage location, not a handling unit.
-        // Leave blank if column is absent — do NOT default to "Nos" or binVal.
-        const huUnitVal = toStr(col("HU Unit"));
+        const binVal    = toStr(col("BIN", "Rack Location"));
+        // HU Unit: only use the explicit HU column. BIN is a storage location, not a handling
+        // unit. Leave blank if column is absent — do NOT default to "Nos" or binVal. Some real
+        // sheets also use literal "NA"/"N/A" to mean "no HU tag assigned" — treat that the same
+        // as blank rather than as a real (and falsely duplicate-flagged) HU code.
+        const huUnitRaw = toStr(col("HU Unit", "HU No"));
+        const huUnitVal = /^n\/?a$/i.test(huUnitRaw.trim()) ? "" : huUnitRaw;
+
+        const stockLocationVal = toStr(col("Stock Location"));
+        // No Category column at all is common on a raw stock-take sheet. Default sensibly by
+        // warehouse instead of always assuming raw material: FG05 is the finished-goods
+        // warehouse, so a category-less row there is finished goods, not "RM".
+        const categoryRaw = toStr(col("Category"));
+        const category = categoryRaw || (stockLocationVal.trim().toUpperCase() === "FG05" ? "FG" : "RM");
 
         const uploadedDiscrepant =
           (shortInPallet    || 0) !== 0 ||
@@ -1174,22 +1299,23 @@ export default function InwardClient() {
           id: `xl-${Date.now()}-${i}`,
           entryStatus: (uploadedDiscrepant ? "DISCREPANCY" : "PENDING") as "PENDING" | "DISCREPANCY",
           status: "APPROVED",
-          gateSerialNo:         toStr(col("Gate Serial No")),
-          date:                 toDate(col("Date")),
+          gateSerialNo:         toStr(col("Gate Serial No", "Gate Entry")),
+          date:                 toDate(col("Date", "Rec Date")),
           source:               toStr(col("Source")),
           invoiceNumber:        toStr(col("Invoice No")),
+          batchNo:              toStr(col("Batch No")),
           sapDocumentNumber:    toStr(col("SAP Doc No")),
-          materialCode:         toStr(col("Materials Code")),
-          description:          toStr(col("Description")),
+          materialCode:         toStr(col("Materials Code", "Material Code")),
+          description:          toStr(col("Description", "Material Description")),
           materialType:         toStr(col("Type of material")),
-          category:             toStr(col("Category")).trim() || "RM",
-          stockLocation:        toStr(col("Stock Location")),
+          category,
+          stockLocation:        stockLocationVal,
           binLocation:          binVal,
           invoiceQtyInPallet:   invPallets,
           invoiceQtyInNos:      invNos,
           receivedQtyInPallets: rcvPallets,
           receivedQtyInNos:     rcvNos,
-          numberOfBoxes:        toNum(col("No of Boxes")),
+          numberOfBoxes:        toNum(col("No of Boxes", "Box")),
           invoiceNetWeight:     netWt,
           receivedNetWeight:    netWt,
           receivedQtyInKgs:     netWt,
@@ -1259,6 +1385,17 @@ export default function InwardClient() {
       return;
     }
 
+    // Block commit if two or more entries target the same real rack bin — rack bins hold
+    // only 1 pallet each. Floor locations are unaffected regardless of warehouse.
+    const rackConflicts = toCommit.filter(e =>
+      duplicateRackBins.has((e.binLocation || '').trim().toUpperCase())
+    );
+    if (rackConflicts.length > 0) {
+      const binList = [...new Set(rackConflicts.map((e) => e.binLocation))].join(", ");
+      setSaveError(`Rack bin capacity exceeded — bin(s) ${binList} are assigned to more than one pallet in this batch. Each rack bin holds exactly 1 pallet; give each pallet its own bin before committing. (Floor locations aren't affected.)`);
+      return;
+    }
+
     // ── Staging area check ─────────────────────────────────────────────────
     const noBin = toCommit.filter(e => !e.binLocation?.trim() && !e.stockLocation?.trim());
     let markAsStaging = false;
@@ -1271,7 +1408,7 @@ export default function InwardClient() {
     try {
       const payload: ManualEntryPayload[] = toCommit.map((e) => ({
         date: e.date, gateSerialNo: e.gateSerialNo, source: e.source,
-        invoiceNumber: e.invoiceNumber, sapDocumentNumber: e.sapDocumentNumber,
+        invoiceNumber: e.invoiceNumber, batchNo: e.batchNo, sapDocumentNumber: e.sapDocumentNumber,
         lrNumber: e.lrNumber, sealNumber: e.sealNumber, truckNumber: e.truckNumber,
         transporter: e.transporter, category: e.category,
         stockLocation: markAsStaging && !e.binLocation?.trim() && !e.stockLocation?.trim() ? "STAGING AREA" : e.stockLocation,
@@ -1316,7 +1453,7 @@ export default function InwardClient() {
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             {selectedWorker
-              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || 'N/A'}`
+              ? `Recording for ${selectedWorker.name} · Warehouse: ${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')}`
               : 'Record goods received at the gate — manually or via Excel upload'}
           </p>
         </div>
@@ -1559,20 +1696,48 @@ export default function InwardClient() {
               ))}
             </div>
 
-            {/* Entry rows */}
-            {filteredEntries.map((entry, idx) => (
+            {/* Entry rows — only this page's slice is ever mounted, see ENTRIES_PAGE_SIZE above */}
+            {pagedEntries.map((entry, idx) => (
               <EntryRow
                 key={entry.id}
                 entry={entry}
-                index={idx}
+                index={(entriesPage - 1) * ENTRIES_PAGE_SIZE + idx}
                 onEdit={() => { setEditingEntry(entry); setFormOpen(true); }}
                 onDelete={() => setEntries(prev => prev.filter(e => e.id !== entry.id))}
                 onStatusChange={(s) => handleStatusChange(entry.id, s)}
                 onUpdateField={(f, v) => handleUpdateField(entry.id, f, v)}
                 isDupeHU={isSpecificHU(entry.huUnit) && duplicateHUs.has(`${(entry.materialCode||'').trim()}|${(entry.huUnit||'').trim()}`)}
+                isDupeRackBin={duplicateRackBins.has((entry.binLocation || '').trim().toUpperCase())}
                 isViewer={isViewer}
               />
             ))}
+
+            {/* Pagination controls — only shown once there's more than one page */}
+            {totalEntriesPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 mt-2 border-t border-gray-100">
+                <div className="text-xs text-gray-400">
+                  Showing {(entriesPage - 1) * ENTRIES_PAGE_SIZE + 1}
+                  –{Math.min(entriesPage * ENTRIES_PAGE_SIZE, filteredEntries.length)} of {filteredEntries.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setEntriesPage((p) => Math.max(1, p - 1))}
+                    disabled={entriesPage <= 1}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed border border-gray-200 rounded-lg transition"
+                  >
+                    <ChevronLeft size={13} /> Prev
+                  </button>
+                  <span className="text-xs font-semibold text-gray-500">Page {entriesPage} of {totalEntriesPages}</span>
+                  <button
+                    onClick={() => setEntriesPage((p) => Math.min(totalEntriesPages, p + 1))}
+                    disabled={entriesPage >= totalEntriesPages}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed border border-gray-200 rounded-lg transition"
+                  >
+                    Next <ChevronRight size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

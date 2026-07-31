@@ -1,0 +1,39 @@
+# Render Blueprint for the JSM Logistics WMS backend ONLY.
+# This replaces Railway as the backend host. The frontend (Netlify) and the database
+# (Supabase Postgres) are untouched — this file provisions nothing but the Node/Express API.
+#
+# To deploy: in the Render dashboard, New -> Blueprint -> point at this repo. Render reads
+# this file and creates the service below. After the first deploy, set the secret env vars
+# marked "sync: false" in the Render dashboard (Environment tab) — they are intentionally
+# NOT stored in this file or in git.
+services:
+  - type: web
+    name: jsm-logistics-backend
+    runtime: node
+    plan: starter          # bump if you need more than 512MB RAM for large Excel imports
+    region: singapore      # pick the region closest to your Supabase project (ap-south-1/ap-southeast-2)
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    disk:
+      # Persistent disk for dynamic-users.json / customer-permissions.json — the only backend
+      # state that lives outside Postgres. Without this, Render's ephemeral filesystem would
+      # wipe admin-created worker/customer accounts and saved permissions on every deploy.
+      name: jsm-backend-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "5001"
+      - key: DATA_DIR
+        value: /data
+      - key: DATABASE_URL
+        sync: false   # paste the Supabase SESSION-pooler connection string (see .env.example)
+      - key: JWT_SECRET
+        sync: false   # generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+      - key: CORS_ORIGIN
+        sync: false   # e.g. https://your-staff-frontend.netlify.app,https://your-customer-portal.netlify.app

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore, whQuery } from '../store/authStore';
 
-const API = 'http://localhost:5001/api';
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
 
 type ReportType = 'inward' | 'outward' | 'inventory' | 'cycle-count' | 'discrepancy' | 'cc-discrepancy';
 
@@ -117,6 +117,7 @@ function flattenForExport(rows: any[], type: ReportType): any[] {
           truckNumber: h.truckNumber, transporter: h.transporter,
           source: src, destination: h.destination,
           sapDocumentNo: h.sapDocumentNo, lrNumber, status: h.status,
+          loaded: h.loaded ? 'Loaded' : 'Not Loaded',
           materialCode: item.materialCode, description: cf.description || item.description,
           materialType: cf.materialType, huUnit: cf.huUnit, category: cf.category,
           invoiceNo: cf.invoiceNo || item.batchNumber, stockLocation: cf.stockLocation,
@@ -393,13 +394,13 @@ function InwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (id
   );
 }
 
-function OutwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (id: string) => void; canDelete?: boolean }) {
+function OutwardTable({ rows, onDelete, canDelete, onToggleLoaded }: { rows: any[]; onDelete: (id: string) => void; canDelete?: boolean; onToggleLoaded?: (id: string, loaded: boolean) => void }) {
   const totalPickedQty = rows.reduce((sum, entry) =>
     sum + (entry.lineItems||[]).reduce((s: number, item: any) => s + (Number(item?.pickedQty)||0), 0), 0);
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead><tr>
-        {['Outward No.','Date','Truck','Transporter','Source','Destination','SAP Doc','LR No.','Material Code','Description','Type of Material','HU Unit','Invoice No.','Stock Location','Picked Qty','Status',''].map(h =>
+        {['Outward No.','Date','Truck','Transporter','Source','Destination','SAP Doc','LR No.','Material Code','Description','Type of Material','HU Unit','Invoice No.','Stock Location','Picked Qty','Status','Loaded',''].map(h =>
           <th key={h} style={TH}>{h}</th>)}
       </tr></thead>
       <tbody>{rows.map((entry: any, ei) => {
@@ -446,6 +447,21 @@ function OutwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (i
                     <span style={{background:'#ecfdf5',color:'#059669',border:'1px solid #a7f3d0',borderRadius:'20px',padding:'1px 8px',fontSize:'10px',fontWeight:700}}>{entry.status}</span>
                   </td>
                   <td style={{...TD,textAlign:'center',verticalAlign:'middle'}} rowSpan={spanCount}>
+                    <button
+                      onClick={() => onToggleLoaded && onToggleLoaded(entry.id, !entry.loaded)}
+                      title={entry.loaded ? 'Click to mark as not loaded' : 'Click to mark as loaded onto truck'}
+                      style={{
+                        background: entry.loaded ? '#ecfdf5' : '#fef3c7',
+                        color: entry.loaded ? '#059669' : '#b45309',
+                        border: entry.loaded ? '1px solid #a7f3d0' : '1px solid #fde68a',
+                        borderRadius: '20px', padding: '3px 10px', fontSize: '10px', fontWeight: 700,
+                        cursor: onToggleLoaded ? 'pointer' : 'default',
+                      }}
+                    >
+                      {entry.loaded ? '✓ Loaded' : 'Not Loaded'}
+                    </button>
+                  </td>
+                  <td style={{...TD,textAlign:'center',verticalAlign:'middle'}} rowSpan={spanCount}>
                     <DeleteBtn onDelete={() => onDelete(entry.id)} />
                   </td>
                 </>
@@ -459,7 +475,7 @@ function OutwardTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete: (i
         <tr style={{background:'#ecfdf5',fontWeight:800,borderTop:'2px solid #a7f3d0'}}>
           <td style={{...TD,color:'#065f46'}} colSpan={14}>TOTAL ({rows.length} dispatches)</td>
           <td style={{...TD,textAlign:'right',color:'#065f46'}}>{totalPickedQty.toFixed(2)}</td>
-          <td colSpan={2} style={TD}></td>
+          <td colSpan={3} style={TD}></td>
         </tr>
       </tfoot>
     </table>
@@ -1217,6 +1233,23 @@ export default function Reports() {
     }
   };
 
+  const handleToggleLoaded = async (id: string, loaded: boolean) => {
+    // Optimistic update
+    setRows(prev => prev.map(r => r.id === id ? { ...r, loaded } : r));
+    try {
+      const res = await fetch(`${API}/outward/${id}/loaded`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loaded }),
+      });
+      if (!res.ok) throw new Error('Failed to update loaded status');
+    } catch (e: any) {
+      // Revert on failure
+      setRows(prev => prev.map(r => r.id === id ? { ...r, loaded: !loaded } : r));
+      window.alert(e.message || 'Failed to update loaded status');
+    }
+  };
+
   const handleDeleteAll = async () => {
     if (!activeTab || filteredRows.length === 0) return;
     if (!window.confirm(`Remove ALL ${filteredRows.length} record(s) in this report? This cannot be undone.`)) return;
@@ -1558,7 +1591,7 @@ export default function Reports() {
           ) : (
             <div style={{ overflowX: 'auto', maxHeight: '520px', overflowY: 'auto' }}>
               {activeTab === 'inward'      && <InwardTable      rows={inwardDisplayRows}      onDelete={handleDelete} />}
-              {activeTab === 'outward'     && <OutwardTable     rows={outwardDisplayRows}     onDelete={handleDelete} />}
+              {activeTab === 'outward'     && <OutwardTable     rows={outwardDisplayRows}     onDelete={handleDelete} onToggleLoaded={handleToggleLoaded} />}
               {activeTab === 'inventory'   && <InventoryTable   rows={inventoryDisplayRows}   onDelete={handleDelete} />}
               {activeTab === 'cycle-count'    && <CycleCountTable             rows={cycleDisplayRows} />}
               {activeTab === 'discrepancy'    && <DiscrepancyTable            rows={discrepancyDisplayRows} onDelete={handleDelete} />}

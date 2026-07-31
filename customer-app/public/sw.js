@@ -3,7 +3,7 @@
 // HMR in dev and fresh WMS data always win), cache a copy in the background,
 // and fall back to the cache only when offline (offline support + installable).
 
-var VERSION = 'jsm-portal-v1';
+var VERSION = 'jsm-portal-v2';
 var SHELL_CACHE = VERSION + '-shell';
 var API_CACHE = VERSION + '-api';
 
@@ -12,6 +12,7 @@ var SHELL_ASSETS = [
   '/index.html',
   '/manifest.webmanifest',
   '/jsm-logo.svg',
+  '/Logo.png',
   '/pwa-192.png',
   '/pwa-512.png',
   '/apple-touch-icon.png'

@@ -1,16 +1,22 @@
 import type { ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { C, IconDashboard, IconInventory, IconCycle, IconMaterials, IconReports, IconMap, IconLogout } from '../ui';
+import {
+  C, IconDashboard, IconInventory, IconCycle, IconMaterials, IconReports, IconMap, IconLogout,
+  IconArrowDownToLine, IconArrowUpFromLine, IconUser,
+} from '../ui';
 import InstallButton from './InstallButton';
 import WorkerDropdown from './WorkerDropdown';
 
 const NAV = [
   { to: '/', label: 'Dashboard', end: true, Icon: IconDashboard },
   { to: '/inventory', label: 'Inventory', Icon: IconInventory },
+  { to: '/inward', label: 'Inward', Icon: IconArrowDownToLine },
+  { to: '/outward', label: 'Outward', Icon: IconArrowUpFromLine },
   { to: '/cycle-count', label: 'Cycle Count', Icon: IconCycle },
   { to: '/materials', label: 'Material Master', Icon: IconMaterials },
   { to: '/reports', label: 'Reports', Icon: IconReports },
+  { to: '/team', label: 'Team', Icon: IconUser },
   { to: '/warehouse-map', label: 'Warehouse Map', Icon: IconMap },
 ];
 
@@ -64,8 +70,8 @@ export default function Layout({ children }: { children: ReactNode }) {
       <div className="main">
         <header className="topbar">
           {/* Mobile brand */}
-          <div className="only-mobile" style={{ alignItems: 'center', gap: 9 }}>
-            <img src="/jsm-logo.svg" alt="JSM Logistics" style={{ height: 20 }} />
+          <div className="only-mobile" style={{ alignItems: 'center', gap: 9, minWidth: 0, flexShrink: 1 }}>
+            <img src="/jsm-logo.svg" alt="JSM Logistics" className="only-mobile-logo" style={{ height: 20, flexShrink: 1 }} />
           </div>
           {/* Scope context (desktop) */}
           <div className="hide-mobile" style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub, fontSize: 13, fontWeight: 600 }}>

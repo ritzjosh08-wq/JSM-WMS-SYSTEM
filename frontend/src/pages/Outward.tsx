@@ -9,7 +9,7 @@ import {
 import * as XLSX from "xlsx";
 import { useAuthStore, whQuery } from "../store/authStore";
 
-const API = "http://localhost:5001/api";
+const API = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface FifoRec {
@@ -331,6 +331,13 @@ export default function OutwardClient() {
   const [dispatching, setDispatching] = useState(false);
   const [dispatchResult, setDispatchResult] = useState<{ outwardNumber: string } | null>(null);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  // Snapshot of what was ACTUALLY dispatched (HU-unit flow), used to build the picklist
+  // export. The `lines` state below belongs to a separate, unused material-code/FIFO entry
+  // flow that this page never renders — exporting from `lines` after a real HU-based
+  // dispatch silently produced an EMPTY picklist (confirmed.length was always 0), so the
+  // "Excel picklist downloading automatically" success message was not actually true. This
+  // snapshot is populated with the real picked batches right before the dispatch call.
+  const [dispatchedLines, setDispatchedLines] = useState<OutwardLine[]>([]);
 
   // HU unit entry workflow
   const [huBulkText, setHuBulkText] = useState<string>("");
@@ -558,12 +565,50 @@ export default function OutwardClient() {
       // Use user-specified partial dispatch qty, clamped to available stock
       const dispQty = Math.min(Math.max(0, huBatchQtys.get(b.id) ?? b.quantity), b.quantity);
       ln.requiredQty += dispQty;
-      ln.picks.push({ batchId: b.id, batchNumber: b.batchNumber, pickQty: dispQty, stockLocation: cf.stockLocation || "", warehouseId: b.warehouseId });
+      ln.picks.push({
+        batchId: b.id, batchNumber: b.batchNumber, pickQty: dispQty,
+        stockLocation: cf.stockLocation || "", warehouseId: b.warehouseId,
+        // Carried through so the exported picklist (below) can show BIN/invoice/receipt
+        // date per pick — the export used to read these off a completely different,
+        // never-populated `lines` state, so they never showed up either.
+        binLocation: cf.binLocation || "",
+        invoiceNo: cf.invoiceNo || "",
+        receiptDate: cf.inwardDate || "",
+      });
     });
     const dispatchLines = Array.from(lineMap.values());
 
     const summary = dispatchLines.map(l => `• ${l.materialCode} — ${l.requiredQty.toFixed(0)} units`).join("\n");
     if (!window.confirm(`Confirm Dispatch to ${header.destination || "destination"}?\n\nTruck: ${header.truckNumber}\nOutbound Invoice: ${header.outboundInvoiceNo || "—"}\n\nMaterials:\n${summary}\n\nThis will deduct from inventory immediately.`)) return;
+
+    // Build the picklist-export snapshot from what's actually being dispatched — this is
+    // the fix for the broken/empty picklist export (see note on dispatchedLines state above).
+    const exportLines: OutwardLine[] = dispatchLines.map(l => ({
+      id: makeLineId(),
+      materialCode: l.materialCode,
+      materialType: l.materialType,
+      description: l.description,
+      category: l.category,
+      huUnit: l.huUnit,
+      requiredQty: l.requiredQty,
+      matchStatus: "FOUND",
+      availableQty: l.requiredQty,
+      expanded: true,
+      recommendations: l.picks.map((p: any) => ({
+        batchId: p.batchId,
+        batchNumber: p.batchNumber,
+        warehouse: "",
+        warehouseId: p.warehouseId,
+        stockLocation: p.stockLocation || "",
+        location: p.binLocation || "",
+        binLocation: p.binLocation || "",
+        available: p.pickQty,
+        recommendedPick: p.pickQty,
+        receiptDate: p.receiptDate || "",
+        materialType: l.materialType || "",
+        invoiceNo: p.invoiceNo || "",
+      })),
+    }));
 
     setDispatching(true); setDispatchError(null);
     try {
@@ -575,7 +620,11 @@ export default function OutwardClient() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Dispatch failed");
       clearDraft();
+      setDispatchedLines(exportLines);
       setDispatchResult({ outwardNumber: data.outwardNumber });
+      // Auto-export picklist — this used to be a no-op because it read from the stale
+      // `lines` state; now it uses the real dispatch snapshot built above.
+      setTimeout(() => exportPicklistXLSX(header, exportLines, data.outwardNumber, true), 300);
     } catch (e: any) {
       const msg = e.message || "Unknown error";
       setDispatchError(msg);
@@ -590,6 +639,7 @@ export default function OutwardClient() {
     setLines([emptyLine()]);
     setDispatchResult(null);
     setDispatchError(null);
+    setDispatchedLines([]);
     setHuBulkText("");
     setHuBatchQtys(new Map());
     setHuEntries([""]);
@@ -615,7 +665,7 @@ export default function OutwardClient() {
         </div>
         <div style={{ display: "flex", gap: "12px" }}>
           <button
-            onClick={() => exportPicklistXLSX(header, lines, dispatchResult.outwardNumber)}
+            onClick={() => exportPicklistXLSX(header, dispatchedLines, dispatchResult.outwardNumber)}
             style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", background: "#1e40af", color: "#fff", border: "none", borderRadius: "10px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}
           >
             <FileSpreadsheet size={16} /> Export Picklist
@@ -642,7 +692,7 @@ export default function OutwardClient() {
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
             {selectedWorker
-              ? `Dispatching from ${selectedWorker.name}'s warehouse (${selectedWorker.warehouseCode || 'N/A'})`
+              ? `Dispatching from ${selectedWorker.name}'s warehouse (${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')})`
               : isViewer ? "View dispatch records and inventory movements" : "Enter HU unit codes → Find matching inventory → Select & Confirm Dispatch"}
           </p>
         </div>
@@ -801,8 +851,6 @@ export default function OutwardClient() {
                         !!cf.discrepancyRemarks || !!cf.discrepancy;
                       const dispQty = huBatchQtys.get(batch.id) ?? batch.quantity;
                       const remaining = batch.quantity - dispQty;
-                      const invoiceQty = Number(cf.invoiceQtyInNos || 0);
-                      const willAutoRectify = isDisc && invoiceQty > 0 && remaining === invoiceQty;
                       return (
                         <tr key={batch.id} onClick={() => {
                           setSelectedBatchIds(prev => {
@@ -850,14 +898,7 @@ export default function OutwardClient() {
                             />
                           </td>
                           <td style={{ padding: "7px 10px", fontWeight: 700, textAlign: "right", color: remaining === 0 ? "#64748b" : remaining > 0 ? "#059669" : "#dc2626" }}>
-                            {sel ? (
-                              <span>
-                                {remaining.toFixed(0)}
-                                {willAutoRectify && (
-                                  <span style={{ display: "block", fontSize: "9px", fontWeight: 800, color: "#059669", marginTop: "1px" }}>✓ Auto-rectify</span>
-                                )}
-                              </span>
-                            ) : "—"}
+                            {sel ? remaining.toFixed(0) : "—"}
                           </td>
                         </tr>
                       );
@@ -870,12 +911,6 @@ export default function OutwardClient() {
                   const selBatches = matchedBatches.filter(b => selectedBatchIds.has(b.id));
                   const totalDispatch = selBatches.reduce((s, b) => s + Math.min(huBatchQtys.get(b.id) ?? b.quantity, b.quantity), 0);
                   const totalRemaining = selBatches.reduce((s, b) => s + (b.quantity - Math.min(huBatchQtys.get(b.id) ?? b.quantity, b.quantity)), 0);
-                  const autoRectifyCount = selBatches.filter(b => {
-                    const cf = parseCF(b.customFields);
-                    const isDisc = b.stockStatus === "DISCREPANCY" || Number(cf.shortInPallet||0) !== 0 || Number(cf.shortExcessInKg||0) !== 0 || Number(cf.shortExcessInQty||0) !== 0 || !!cf.discrepancyRemarks || !!cf.discrepancy;
-                    const remaining = b.quantity - Math.min(huBatchQtys.get(b.id) ?? b.quantity, b.quantity);
-                    return isDisc && Number(cf.invoiceQtyInNos||0) > 0 && remaining === Number(cf.invoiceQtyInNos||0);
-                  }).length;
                   return (
                   <div style={{ marginTop: "14px", background: "#ecfdf5", border: "1.5px solid #a7f3d0", borderRadius: "10px", padding: "14px 18px", display: "flex", alignItems: "center", gap: "16px" }}>
                     <CheckCircle2 size={18} style={{ color: "#059669", flexShrink: 0 }} />
@@ -886,7 +921,6 @@ export default function OutwardClient() {
                       <div style={{ fontSize: "11px", color: "#059669", marginTop: "2px" }}>
                         Dispatch: <strong>{totalDispatch.toFixed(0)}</strong> units
                         {totalRemaining > 0 && <> · Remaining in inventory: <strong>{totalRemaining.toFixed(0)}</strong></>}
-                        {autoRectifyCount > 0 && <span style={{ marginLeft: "8px", color: "#b45309", fontWeight: 700 }}>⚡ {autoRectifyCount} discrepancy batch{autoRectifyCount !== 1 ? "es" : ""} will auto-rectify</span>}
                       </div>
                     </div>
                     <button onClick={handleHUDispatch} disabled={dispatching}

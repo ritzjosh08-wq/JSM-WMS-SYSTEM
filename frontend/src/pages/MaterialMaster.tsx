@@ -7,12 +7,30 @@ import {
 } from 'recharts';
 import { Box, RefreshCw, TrendingUp, Weight, Layers } from 'lucide-react';
 
-const API = 'http://localhost:5001/api';
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
 
 const COLORS_RM = [
   '#2563eb','#7c3aed','#059669','#d97706','#dc2626',
   '#0891b2','#db2777','#65a30d','#1d4ed8','#6d28d9',
 ];
+
+// Renders the pallet count centered *inside* each donut segment (instead of
+// floating outside the ring), so labels never collide with each other or
+// with the legend underneath.
+const RADIAN = Math.PI / 180;
+function renderRmSliceLabel(props: any) {
+  const { cx, cy, midAngle, innerRadius, outerRadius, value, percent } = props;
+  if (!percent || percent < 0.045) return null; // skip slivers too thin to hold text
+  const radius = innerRadius + (outerRadius - innerRadius) / 2;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} textAnchor="middle" dominantBaseline="central"
+      style={{ fontSize: 12, fontWeight: 800, fill: '#fff', pointerEvents: 'none' }}>
+      {Number(value).toFixed(0)}
+    </text>
+  );
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 function getDateFromEntry(entry: any): Date | null {
@@ -335,34 +353,54 @@ export default function MaterialMaster() {
             <div style={{ textAlign:'center', padding:'48px 0', color:'#94a3b8', fontSize:'12px' }}>No RM inventory data</div>
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={240}>
-                <PieChart margin={{ top:0, right:0, bottom:0, left:0 }}>
-                  <Pie
-                    data={rmTypeData}
-                    dataKey="pallets"
-                    nameKey="name"
-                    cx="50%" cy="50%"
-                    outerRadius={100}
-                    innerRadius={44}
-                    paddingAngle={3}
-                    label={false}
-                    labelLine={false}
-                  >
-                    {rmTypeData.map((_, i) => (
-                      <Cell key={i} fill={COLORS_RM[i % COLORS_RM.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
-                    formatter={(_v: any, name: string) => [name, 'Type']}
-                  />
-                  <Legend
-                    iconType="circle"
-                    iconSize={9}
-                    wrapperStyle={{ fontSize:'11px', lineHeight:'20px' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <div style={{ position:'relative' }}>
+                <ResponsiveContainer width="100%" height={210}>
+                  <PieChart margin={{ top:8, right:8, bottom:8, left:8 }}>
+                    <Pie
+                      data={rmTypeData}
+                      dataKey="pallets"
+                      nameKey="name"
+                      cx="50%" cy="50%"
+                      outerRadius={90}
+                      innerRadius={58}
+                      paddingAngle={3}
+                      label={renderRmSliceLabel}
+                      labelLine={false}
+                      stroke="#fff"
+                      strokeWidth={2}
+                    >
+                      {rmTypeData.map((_, i) => (
+                        <Cell key={i} fill={COLORS_RM[i % COLORS_RM.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
+                      formatter={(value: any, name: string) => [`${Number(value).toFixed(0)} pallets`, name]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                {/* Center total — sits in the donut hole, independent of chart width */}
+                <div style={{
+                  position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
+                  textAlign:'center', pointerEvents:'none',
+                }}>
+                  <div style={{ fontSize:'22px', fontWeight:900, color:'#0f172a', lineHeight:1 }}>{rmPallets.toFixed(0)}</div>
+                  <div style={{ fontSize:'10px', color:'#94a3b8', fontWeight:600, marginTop:'2px' }}>pallets</div>
+                </div>
+              </div>
+              {/* Legend — own row below the chart, grid-wrapped so long names never collide with the pie */}
+              <div style={{
+                display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(110px, 1fr))', gap:'6px 10px',
+                marginTop:'10px', paddingTop:'10px', borderTop:'1px solid #f1f5f9',
+              }}>
+                {rmTypeData.map((t, i) => (
+                  <div key={t.name} style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', minWidth:0 }}>
+                    <span style={{ width:9, height:9, borderRadius:'50%', background: COLORS_RM[i % COLORS_RM.length], flexShrink:0 }} />
+                    <span style={{ color:'#475569', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.name}</span>
+                    <span style={{ color:'#0f172a', fontWeight:800, marginLeft:'auto', flexShrink:0 }}>{t.pallets.toFixed(0)}</span>
+                  </div>
+                ))}
+              </div>
             </>
           )}
         </div>

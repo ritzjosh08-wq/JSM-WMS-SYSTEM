@@ -74,10 +74,21 @@ table { border-collapse: collapse; }
 
 .main { display: flex; flex-direction: column; min-width: 0; }
 .topbar {
-  height: 64px; background: rgba(255,255,255,.85); backdrop-filter: blur(10px);
+  min-height: 64px; background: rgba(255,255,255,.85); backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20;
-  display: flex; align-items: center; gap: 12px; padding: 0 22px;
+  display: flex; align-items: center; gap: 12px;
+  /* apple-mobile-web-app-status-bar-style is black-translucent, meaning iOS draws the
+     clock/signal/battery ON TOP of our content instead of pushing it down — without this
+     the logo, worker-switcher and logout button render underneath the status bar and
+     become unreachable. env(...) is 0 on devices/browsers without a notch, so this is a
+     no-op everywhere else. */
+  padding: env(safe-area-inset-top, 0px) 22px 0;
+  box-sizing: border-box;
 }
+/* Logout and the worker switcher must never be squeezed out of reach on narrow screens.
+   (No overflow-x here on purpose: setting it would force overflow-y to clip too, which
+   would cut off the worker-switcher's dropdown popover — see .topbar-worker below.) */
+.topbar > .only-mobile, .topbar > button, .topbar-worker { flex-shrink: 0; }
 .content { padding: 24px; max-width: 1500px; width: 100%; margin: 0 auto; flex: 1; }
 
 /* mobile bottom nav (hidden on desktop) */
@@ -136,9 +147,11 @@ table { border-collapse: collapse; }
   .shell { grid-template-columns: 1fr; }
   .sidebar { display: none; }
   .content { padding: 16px 14px 88px; }
-  .topbar { padding: 0 14px; }
+  .topbar { padding: env(safe-area-inset-top, 0px) 14px 0; }
   .hide-mobile { display: none !important; }
   .toolbar-input, .input { width: 100% !important; }
+  .wd-label { display: none; } /* worker-switcher shows icon + count only on phones, so it and Sign out always fit */
+  .sidebar-brand img, .topbar img.only-mobile-logo { max-width: 120px; }
   .bottomnav {
     display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
     background: rgba(255,255,255,.94); backdrop-filter: blur(12px); border-top: 1px solid var(--border);

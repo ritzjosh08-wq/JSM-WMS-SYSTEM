@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { API_BASE, getToken } from '../api';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 const API = API_BASE;
 
@@ -114,8 +115,8 @@ export default function WarehouseMap() {
     return map;
   }, [inventory]);
 
-  const load = useCallback(async () => {
-    setLoading(true); setSeeding(false);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) { setLoading(true); setSeeding(false); }
     try {
       const token = getToken();
       const r = await fetch(`${API}/warehouse/layout?warehouse=${selectedWarehouse}`, {
@@ -126,10 +127,13 @@ export default function WarehouseMap() {
       if (data.racks?.length === 0 && data.floorLocations?.length === 0) setSeeding(true);
       setFloor(data.floorLocations || []); setRacks(data.racks || []); setInventory(data.inventory || []);
     } catch (e) { console.error(e); }
-    setLoading(false);
+    if (!opts?.silent) setLoading(false);
   }, [selectedWarehouse]);
 
   useEffect(() => { load(); }, [load]);
+  // Background poll — bin/floor occupancy updates as workers move pallets
+  // in the WMS software, without the customer needing to reload.
+  useLiveRefresh(() => load({ silent: true }));
 
   function switchWarehouse(code: WarehouseCode) { if (code === selectedWarehouse) return; setSelectedWarehouse(code); setSelected(null); setTab('floor'); }
 
@@ -246,7 +250,7 @@ export default function WarehouseMap() {
               </button>
             ))}
           </div>
-          <button onClick={load} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', background: '#2563eb', border: 'none', borderRadius: '9px', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+          <button onClick={() => load()} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', background: '#2563eb', border: 'none', borderRadius: '9px', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
             <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />{loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>

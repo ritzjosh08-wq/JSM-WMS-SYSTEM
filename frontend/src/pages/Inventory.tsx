@@ -2,11 +2,11 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Package, Weight, Layers, Search, RefreshCw, ArrowDownToLine,
   ArrowUpFromLine, MapPin, Edit3, Check, X, ChevronUp, ChevronDown, Trash2,
-  Grid3X3, History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck, Copy
+  History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck, Copy, PackageX
 } from "lucide-react";
 import { useAuthStore, whQuery } from "../store/authStore";
 
-const API = "http://localhost:5001/api";
+const API = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
 
 interface InventoryItem {
   id: string;
@@ -56,6 +56,11 @@ interface EnrichedItem extends InventoryItem {
   stockLocation: string;
   source: string;
   invoiceNo: string;
+  // Real manufacturer/lot batch number from the Excel/manual "Batch No" field — distinct from
+  // invoiceNo and from `batchNumber` (the InventoryBatch DB field, which is actually the
+  // internal invoice-based grouping key inward uses to identify a shipment, not a true batch
+  // number). Blank when no "Batch No" was ever provided for this stock.
+  realBatchNo: string;
   materialType: string;
   materialTypeList: string[];
   inwardDate: string;
@@ -130,23 +135,39 @@ async function copyToClipboard(text: string): Promise<boolean> {
 // ── Copyable HU Unit cell ────────────────────────────────────────────────
 // Click the HU value (or the copy icon) to copy it straight to the
 // clipboard — paste it directly into the "HU Unit Entry" box on the
-// Outward Dispatch page.
-function CopyableHU({ value, copiedKey, activeKey, onCopy }: {
+// Outward Dispatch page. A checkbox lets the user build up a multi-HU
+// selection across rows (any material, any page of results) instead of
+// only being able to copy one at a time or the entire filtered list.
+function CopyableHU({ value, copiedKey, activeKey, onCopy, selected, onToggleSelect }: {
   value: string; copiedKey: string; activeKey: string | null; onCopy: (key: string, text: string) => void;
+  selected?: boolean; onToggleSelect?: () => void;
 }) {
   if (!value || value === "—") return <span style={{ color: "#cbd5e1" }}>—</span>;
   const justCopied = activeKey === copiedKey;
   return (
-    <span
-      onClick={(e) => { e.stopPropagation(); onCopy(copiedKey, value); }}
-      title="Click to copy HU unit"
-      style={{
-        display: "inline-flex", alignItems: "center", gap: "4px", cursor: "pointer",
-        color: justCopied ? "#059669" : "inherit", fontWeight: justCopied ? 800 : undefined,
-      }}
-    >
-      {justCopied ? <Check size={11} style={{ color: "#059669" }} /> : <Copy size={11} style={{ opacity: 0.45 }} />}
-      {value}
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onChange={() => {}}
+          onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+          title="Select this HU unit"
+          style={{ cursor: "pointer", width: "13px", height: "13px", accentColor: "#7c3aed" }}
+        />
+      )}
+      <span
+        onClick={(e) => { e.stopPropagation(); onCopy(copiedKey, value); }}
+        title="Click to copy HU unit"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: "4px", cursor: "pointer",
+          color: justCopied ? "#059669" : (selected ? "#7c3aed" : "inherit"),
+          fontWeight: justCopied ? 800 : (selected ? 700 : undefined),
+        }}
+      >
+        {justCopied ? <Check size={11} style={{ color: "#059669" }} /> : <Copy size={11} style={{ opacity: 0.45 }} />}
+        {value}
+      </span>
     </span>
   );
 }
@@ -808,6 +829,169 @@ function RectifyDiscrepancyModal({
   );
 }
 
+// ── Mark Damaged Modal ───────────────────────────────────────────────────────
+// New feature: flag part (or all) of a batch's quantity as damaged. Backed by
+// POST /api/damage/:batchId/mark (routes/damage.ts) — writes a permanent DamageRecord
+// and reduces this batch's sellable quantity by the damaged amount. Does NOT touch
+// stockStatus/discrepancy fields — damage and discrepancy are independent facts about a
+// batch (same principle dispatch already follows: see the note in routes/outward.ts).
+const DAMAGE_TYPES = ["TRANSIT_DAMAGE", "HANDLING_DAMAGE", "QUALITY_ISSUE", "WATER_DAMAGE", "OTHER"];
+
+function MarkDamagedModal({
+  item, onSaved, onClose,
+}: {
+  item: EnrichedItem;
+  onSaved: () => void;
+  onClose: () => void;
+}) {
+  const available = item.displayQtyNos || item.quantity;
+  const [damagedQty, setDamagedQty] = useState<number>(0);
+  const [damageType, setDamageType] = useState(DAMAGE_TYPES[0]);
+  const [remarks, setRemarks] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!damagedQty || damagedQty <= 0) { setError("Enter a damaged quantity greater than 0."); return; }
+    if (damagedQty > available) { setError(`Cannot exceed available quantity (${available}).`); return; }
+    if (!remarks.trim()) { setError("Remarks are required — describe how the damage happened."); return; }
+    setSaving(true); setError(null);
+    try {
+      const res = await fetch(`${API}/damage/${item.id}/mark`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ damagedQty, damageType, remarks: remarks.trim() }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Failed to mark damaged goods");
+      onSaved(); onClose();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 110, background: "rgba(0,0,0,0.52)",
+               display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <div style={{ background: "#fff", borderRadius: "16px", width: "100%", maxWidth: "520px",
+                    maxHeight: "92vh", overflowY: "auto", boxShadow: "0 24px 60px rgba(180,83,9,0.18)" }}>
+
+        <div style={{ background: "linear-gradient(135deg,#fff7ed 0%,#fffbeb 100%)",
+                      borderBottom: "1.5px solid #fed7aa", padding: "18px 24px 14px",
+                      borderRadius: "16px 16px 0 0", position: "sticky", top: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px",
+                            fontWeight: 900, fontSize: "14px", color: "#b45309" }}>
+                <PackageX size={16} /> Mark Damaged Goods
+              </div>
+              <div style={{ fontSize: "11px", color: "#64748b", marginTop: "3px" }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#1e40af" }}>
+                  {item.material?.code || "—"}
+                </span>
+                {" · "}{item.material?.description || "—"}
+                {" · "}Available: <strong>{available}</strong> {item.huUnit || "Nos"}
+              </div>
+            </div>
+            <button onClick={onClose}
+              style={{ background: "#fff", border: "1.5px solid #fed7aa", borderRadius: "8px",
+                       padding: "6px", cursor: "pointer", color: "#b45309", display: "flex", alignItems: "center" }}>
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div>
+              <label style={{ display: "block", fontSize: "10px", fontWeight: 700, color: "#64748b",
+                              textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "5px" }}>
+                Damaged Qty <span style={{ color: "#dc2626" }}>*</span>
+              </label>
+              <input
+                type="number" min={0} max={available}
+                value={damagedQty || ""}
+                onChange={e => setDamagedQty(Math.max(0, Number(e.target.value)))}
+                placeholder="0"
+                style={{ width: "100%", border: "1.5px solid #fed7aa", borderRadius: "8px",
+                         padding: "8px 12px", fontSize: "13px", fontWeight: 700, color: "#0f172a",
+                         outline: "none", boxSizing: "border-box" }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: "10px", fontWeight: 700, color: "#64748b",
+                              textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "5px" }}>
+                Damage Type
+              </label>
+              <select
+                value={damageType}
+                onChange={e => setDamageType(e.target.value)}
+                style={{ width: "100%", border: "1.5px solid #fed7aa", borderRadius: "8px",
+                         padding: "8px 12px", fontSize: "12px", fontWeight: 700, color: "#0f172a",
+                         outline: "none", boxSizing: "border-box", background: "#fff" }}
+              >
+                {DAMAGE_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontSize: "10px", fontWeight: 700, color: "#64748b",
+                            textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "5px" }}>
+              Remarks <span style={{ color: "#dc2626" }}>*</span>
+            </label>
+            <textarea
+              value={remarks}
+              onChange={e => setRemarks(e.target.value)}
+              placeholder="Describe how/when the damage occurred — e.g. 2 pallets crushed during transit, noticed on unloading."
+              rows={3}
+              style={{ width: "100%", border: `1.5px solid ${remarks.trim() ? "#fed7aa" : "#e2e8f0"}`,
+                       borderRadius: "8px", padding: "9px 12px", fontSize: "12px", color: "#0f172a",
+                       background: "#fffbeb", outline: "none", boxSizing: "border-box",
+                       resize: "vertical", fontFamily: "inherit", lineHeight: "1.6" }}
+            />
+          </div>
+
+          <div style={{ fontSize: "11px", color: "#94a3b8" }}>
+            This reduces the batch's available quantity by the damaged amount and logs a permanent damage record.
+            The batch's stock status / discrepancy flags are not affected.
+          </div>
+
+          {error && (
+            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "8px",
+                          padding: "10px 14px", color: "#dc2626", fontSize: "12px", fontWeight: 600 }}>
+              ⚠ {error}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px",
+                      padding: "14px 24px 18px", borderTop: "1px solid #f1f5f9" }}>
+          <button onClick={onClose}
+            style={{ padding: "9px 20px", background: "#f8fafc", border: "1.5px solid #e2e8f0",
+                     borderRadius: "9px", fontSize: "12px", fontWeight: 700, color: "#64748b", cursor: "pointer" }}>
+            Cancel
+          </button>
+          <button onClick={submit} disabled={saving}
+            style={{ padding: "9px 24px", background: saving ? "#fdba74" : "#ea580c",
+                     border: "none", borderRadius: "9px", fontSize: "12px", fontWeight: 800,
+                     color: "#fff", cursor: saving ? "not-allowed" : "pointer",
+                     display: "flex", alignItems: "center", gap: "6px" }}>
+            {saving
+              ? <><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Marking…</>
+              : <><PackageX size={13} /> Mark Damaged</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 export default function InventoryClient() {
   const user = useAuthStore(s => s.user);
@@ -828,7 +1012,11 @@ export default function InventoryClient() {
   const [sortDir, setSortDir]       = useState<SortDir>("desc");
   const [selectedItem, setSelectedItem] = useState<EnrichedItem | null>(null);
   const [rectifyItem,  setRectifyItem]  = useState<EnrichedItem | null>(null);
+  const [damageItem,   setDamageItem]   = useState<EnrichedItem | null>(null);
   const [deletingId, setDeletingId]     = useState<string | null>(null);
+  // Which item is mid one-click "Auto-Rectify" (see autoRectify below) — disables that
+  // item's button while the PATCH is in flight so a double-click can't double-submit.
+  const [autoRectifyingId, setAutoRectifyingId] = useState<string | null>(null);
   // Which HU Unit cell (or the bulk-copy button) was just clicked — drives the
   // brief "copied ✓" feedback state before it fades back to the copy icon.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -839,24 +1027,17 @@ export default function InventoryClient() {
       setTimeout(() => setCopiedKey(prev => (prev === key ? null : prev)), 1500);
     });
   }, []);
-  const [expandedLocs, setExpandedLocs] = useState<Set<string>>(new Set());
-  const toggleLoc = (loc: string) => setExpandedLocs(prev => {
-    const next = new Set(prev);
-    next.has(loc) ? next.delete(loc) : next.add(loc);
-    return next;
-  });
-  const [expandedRacks, setExpandedRacks] = useState<Set<string>>(new Set());
-  const toggleRack = (rack: string) => setExpandedRacks(prev => {
-    const next = new Set(prev);
-    next.has(rack) ? next.delete(rack) : next.add(rack);
-    return next;
-  });
-  const [expandedFloorZones, setExpandedFloorZones] = useState<Set<string>>(new Set());
-  const toggleFloorZone = (zone: string) => setExpandedFloorZones(prev => {
-    const next = new Set(prev);
-    next.has(zone) ? next.delete(zone) : next.add(zone);
-    return next;
-  });
+  // Manually-picked rows (via the checkbox in the HU Unit column) for the "Copy Selected HU
+  // Units" flow — lets the user pick specific pallets' HU tags to copy instead of only being
+  // able to copy one at a time or every HU unit currently in view.
+  const [selectedHUIds, setSelectedHUIds] = useState<Set<string>>(new Set());
+  const toggleHUSelect = useCallback((id: string) => {
+    setSelectedHUIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -900,6 +1081,57 @@ export default function InventoryClient() {
     }
   }, [load]);
 
+  // ── Auto-Rectify: one-click discrepancy resolution ─────────────────────────
+  // The existing "Rectify Discrepancy" modal already pre-fills received qty to match
+  // invoice qty — resolving a discrepancy has always meant confirming those same
+  // pre-filled numbers plus typing a remarks note by hand. This does the identical PATCH
+  // (same payload the modal's Submit button sends) straight from the inventory row, with
+  // an auto-generated remarks note, so routine reconciliations don't need the modal's
+  // manual click-through at all. It's still a deliberate, per-item click (not silent/
+  // background) and it still writes a full rectificationHistory entry, so every
+  // auto-rectification remains fully audited and reversible via "Edit Full Details".
+  const autoRectify = useCallback(async (item: EnrichedItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setAutoRectifyingId(item.id);
+    try {
+      const correctedQty     = item.invoiceQtyInNos    || item.quantity;
+      const correctedPallets = item.invoiceQtyInPallet  || item.displayQtyPallet;
+      const correctedKg      = item.invoiceNetWeight    || item.displayQtyKg;
+      const history: any[] = Array.isArray(item.cf.rectificationHistory) ? item.cf.rectificationHistory : [];
+      const newCf = {
+        ...item.cf,
+        shortInPallet: 0, shortExcessInKg: 0, shortExcessInQty: 0,
+        discrepancyRemarks: "", discrepancy: false,
+        receivedQtyInNos: correctedQty, receivedQtyInPallets: correctedPallets, receivedNetWeight: correctedKg,
+        pallets: correctedPallets, netWeight: correctedKg, nos: correctedQty,
+        rectificationHistory: [
+          ...history,
+          {
+            rectifiedAt: new Date().toISOString(),
+            remarks: "Auto-rectified — received quantities reconciled to invoice values.",
+            autoRectified: true,
+            prevShortPallet: item.shortInPallet, prevShortKg: item.shortExcessInKg, prevShortQty: item.shortExcessInQty,
+            prevRemarks: item.discrepancyRemarks,
+            prevReceivedQty: item.receivedQtyInNos, prevReceivedPallet: item.receivedQtyInPallets, prevReceivedKg: item.receivedNetWeight,
+            invoiceQty: item.invoiceQtyInNos, invoicePallet: item.invoiceQtyInPallet, invoiceKg: item.invoiceNetWeight,
+            correctedQty, correctedPallets, correctedKg,
+          },
+        ],
+      };
+      const res = await fetch(`${API}/inventory/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quantity: correctedQty, stockStatus: "GOOD", customFields: newCf }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Failed to auto-rectify"); }
+      load();
+    } catch (e: any) {
+      alert(`Auto-rectify failed: ${e.message || "Unknown error"}`);
+    } finally {
+      setAutoRectifyingId(null);
+    }
+  }, [load]);
+
   // Enrich items with parsed customFields
   const enriched: EnrichedItem[] = useMemo(() =>
     raw.map(item => {
@@ -933,6 +1165,10 @@ export default function InventoryClient() {
         stockLocation: cf.stockLocation || "—",
         source:    cf.source    || "—",
         invoiceNo: cf.invoiceNo || item.batchNumber || "—",
+        // Real batch number if one was captured on inward — NOT a fallback to invoiceNo/
+        // batchNumber, so the Batch No column stops silently duplicating Invoice No when no
+        // real batch number was ever entered.
+        realBatchNo: cf.batchNo || "",
         // A single aggregated batch can legitimately span more than one "Type of Material"
         // value (e.g. several pallets of the same material code came in tagged "Board",
         // "CFC", and "Reel" on the same invoice) — cf.materialType may now be a comma-joined
@@ -990,110 +1226,24 @@ export default function InventoryClient() {
     return Array.from(types).sort();
   }, [enriched]);
 
-  // RM grouped by material type — pallets + kg
+  // RM grouped by material type — pallets + kg, one card per distinct Type of Material.
+  // Group by materialTypeList (the flattened per-type array), NOT the raw materialType
+  // string — a batch that still carries a joined value like "Board, Film, Metallocene,
+  // Reel" (e.g. legacy data committed before batches were split per type on Inward commit)
+  // would otherwise show up as one merged "Board, Film, Metallocene, Reel" card instead of
+  // separate Board / Film / Metallocene / Reel cards. Freshly-committed batches now carry
+  // exactly one type each, so this is a no-op for them and only helps old/edge-case data.
   const rmByType = useMemo(() => {
     const map = new Map<string, { kg: number; pallets: number }>();
     rmItems.forEach(i => {
-      const type = i.materialType || "Unclassified";
-      const cur = map.get(type) || { kg: 0, pallets: 0 };
-      map.set(type, { kg: cur.kg + i.displayQtyKg, pallets: cur.pallets + i.displayQtyPallet });
+      const types = i.materialTypeList.length ? i.materialTypeList : ["Unclassified"];
+      types.forEach(type => {
+        const cur = map.get(type) || { kg: 0, pallets: 0 };
+        map.set(type, { kg: cur.kg + i.displayQtyKg, pallets: cur.pallets + i.displayQtyPallet });
+      });
     });
     return Array.from(map.entries()).sort((a, b) => b[1].pallets - a[1].pallets);
   }, [rmItems]);
-
-  // Bin-wise material allocation — grouped: stock location → bin → items
-  const stockBinAllocation = useMemo(() => {
-    const locMap = new Map<string, Map<string, { pallets: number; kg: number; items: EnrichedItem[] }>>();
-    activeItems.forEach(i => {
-      const loc = i.stockLocation !== "—" && i.stockLocation ? i.stockLocation : "Unassigned";
-      const bin = i.binLocation   !== "—" && i.binLocation   ? i.binLocation   : "No Bin";
-      if (!locMap.has(loc)) locMap.set(loc, new Map());
-      const binMap = locMap.get(loc)!;
-      if (!binMap.has(bin)) binMap.set(bin, { pallets: 0, kg: 0, items: [] });
-      const cur = binMap.get(bin)!;
-      cur.pallets += i.displayQtyPallet;
-      cur.kg      += i.displayQtyKg;
-      cur.items.push(i);
-    });
-    return Array.from(locMap.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([loc, binMap]) => {
-        const bins = Array.from(binMap.entries())
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([bin, data]) => ({ bin, ...data }));
-        return {
-          loc,
-          bins,
-          totalPallets: bins.reduce((s, b) => s + b.pallets, 0),
-          totalKg:      bins.reduce((s, b) => s + b.kg, 0),
-          totalItems:   bins.reduce((s, b) => s + b.items.length, 0),
-        };
-      });
-  }, [activeItems]);
-
-  // Rack-wise allocation — only items actually stored in a real provisioned Rack Bin
-  // (storageKind === "RACK"), grouped Rack → Row → Bin. This is separate from the
-  // Bin-wise view above, which only ever showed the free-text BIN string and never
-  // distinguished true rack placement from a plain floor location.
-  const rackAllocation = useMemo(() => {
-    const rackMap = new Map<string, Map<string, { pallets: number; kg: number; items: EnrichedItem[] }>>();
-    activeItems.filter(i => i.storageKind === "RACK").forEach(i => {
-      const rack = i.rackCode || "Unknown Rack";
-      const row = i.rackRowCode || i.rackBinCode || "Unknown Row";
-      if (!rackMap.has(rack)) rackMap.set(rack, new Map());
-      const rowMap = rackMap.get(rack)!;
-      if (!rowMap.has(row)) rowMap.set(row, { pallets: 0, kg: 0, items: [] });
-      const cur = rowMap.get(row)!;
-      cur.pallets += i.displayQtyPallet;
-      cur.kg      += i.displayQtyKg;
-      cur.items.push(i);
-    });
-    return Array.from(rackMap.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([rack, rowMap]) => {
-        const rows = Array.from(rowMap.entries())
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([row, data]) => ({ row, ...data }));
-        return {
-          rack,
-          rows,
-          totalPallets: rows.reduce((s, r) => s + r.pallets, 0),
-          totalKg:      rows.reduce((s, r) => s + r.kg, 0),
-          totalItems:   rows.reduce((s, r) => s + r.items.length, 0),
-        };
-      });
-  }, [activeItems]);
-
-  // Floor-wise allocation — items stored in a FloorLocation (storageKind === "FLOOR"),
-  // grouped by zone → floor code.
-  const floorAllocation = useMemo(() => {
-    const zoneMap = new Map<string, Map<string, { pallets: number; kg: number; items: EnrichedItem[] }>>();
-    activeItems.filter(i => i.storageKind === "FLOOR").forEach(i => {
-      const zone = i.floorZone || "Unassigned";
-      const code = i.floorCode || "Unknown";
-      if (!zoneMap.has(zone)) zoneMap.set(zone, new Map());
-      const codeMap = zoneMap.get(zone)!;
-      if (!codeMap.has(code)) codeMap.set(code, { pallets: 0, kg: 0, items: [] });
-      const cur = codeMap.get(code)!;
-      cur.pallets += i.displayQtyPallet;
-      cur.kg      += i.displayQtyKg;
-      cur.items.push(i);
-    });
-    return Array.from(zoneMap.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([zone, codeMap]) => {
-        const codes = Array.from(codeMap.entries())
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([code, data]) => ({ code, ...data }));
-        return {
-          zone,
-          codes,
-          totalPallets: codes.reduce((s, c) => s + c.pallets, 0),
-          totalKg:      codes.reduce((s, c) => s + c.kg, 0),
-          totalItems:   codes.reduce((s, c) => s + c.items.length, 0),
-        };
-      });
-  }, [activeItems]);
 
   // Filter + sort
   const filtered = useMemo(() => {
@@ -1151,6 +1301,30 @@ export default function InventoryClient() {
     });
     return out;
   }, [filtered]);
+
+  // Distinct, specific HU unit tags for whichever rows the user has checked via the HU Unit
+  // column checkbox — lets them build a custom multi-HU selection (any mix of materials/rows)
+  // instead of only "one at a time" or "every HU unit currently in view".
+  //
+  // IMPORTANT: this must scan `enriched` (every row, regardless of the current filter/search),
+  // not `filtered`. The whole point of the checkbox picker is to build a selection that spans
+  // multiple material types — e.g. check a few HU units while Material Type is filtered to
+  // "RM", then switch the filter to "FG" and check a few more. If this scanned `filtered`
+  // instead, switching the filter would make the previously-checked rows fall out of view and
+  // their HU units would silently disappear from the copy output — even though selectedHUIds
+  // (and the "(N)" count on the Copy Selected button) still counted them as selected.
+  const selectedHUUnits = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    enriched.forEach(i => {
+      if (!selectedHUIds.has(i.id)) return;
+      const v = (i.huUnit || "").trim();
+      if (!v || GENERIC_HU_VALUES.has(v.toLowerCase())) return;
+      const key = v.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); out.push(v); }
+    });
+    return out;
+  }, [enriched, selectedHUIds]);
 
   const handleDeleteAll = useCallback(async () => {
     if (filtered.length === 0) return;
@@ -1219,6 +1393,15 @@ export default function InventoryClient() {
         />
       )}
 
+      {/* Mark Damaged Goods modal */}
+      {damageItem && (
+        <MarkDamagedModal
+          item={damageItem}
+          onClose={() => setDamageItem(null)}
+          onSaved={() => { setDamageItem(null); load(); }}
+        />
+      )}
+
       {/* Edit modal */}
       {selectedItem && (
         <EditDetailModal
@@ -1238,7 +1421,7 @@ export default function InventoryClient() {
             {selectedWorker ? `${selectedWorker.name}'s Inventory` : 'Inventory'}
           </h1>
           <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
-            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || 'N/A'} · ` : ''}
+            {selectedWorker ? `Warehouse: ${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')} · ` : ''}
             Live stock · Updated {lastRefresh.toLocaleTimeString("en-IN")}
           </p>
         </div>
@@ -1388,261 +1571,6 @@ export default function InventoryClient() {
         </div>
       )}
 
-      {/* ── Bin-wise Material Allocation ──────────────────────────────── */}
-      {stockBinAllocation.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-          <div style={{ fontSize: "10px", fontWeight: 800, color: "#0369a1", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
-            <Grid3X3 size={12} /> Bin-wise Material Allocation
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-              <thead>
-                <tr>
-                  {[
-                    { h: "BIN",         align: "left"  },
-                    { h: "Material Code", align: "left" },
-                    { h: "Description", align: "left"  },
-                    { h: "HU Unit",     align: "left"  },
-                    { h: "Type",        align: "left"  },
-                    { h: "Category",    align: "left"  },
-                    { h: "Pallets",     align: "right" },
-                    { h: "Net Wt (kg)", align: "right" },
-                    { h: "Qty (Nos)",   align: "right" },
-                  ].map(({ h, align }) => (
-                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {stockBinAllocation.map(({ loc, bins, totalPallets, totalKg, totalItems }, li) => {
-                  const isOpen = expandedLocs.has(loc);
-                  return (
-                    <React.Fragment key={loc}>
-                      {/* ── Stock Location dropdown header ──────────── */}
-                      <tr
-                        onClick={() => toggleLoc(loc)}
-                        style={{ background: "#f0fdf4", cursor: "pointer" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#dcfce7"}
-                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#f0fdf4"}
-                      >
-                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#059669", borderBottom: isOpen ? "1px solid #d1fae5" : "1px solid #e2e8f0", borderTop: li > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                            <span style={{ fontSize: "11px", color: "#059669", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
-                            <span style={{ background: "#059669", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>{loc}</span>
-                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
-                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
-                            </span>
-                          </span>
-                        </td>
-                      </tr>
-                      {/* ── Expanded: bins + material rows ──────────── */}
-                      {isOpen && bins.map(({ bin, pallets, kg, items }, bi) => (
-                        <React.Fragment key={bin}>
-                          <tr style={{ background: "#f0f9ff" }}>
-                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#0369a1", borderBottom: "1px solid #e2e8f0", borderTop: bi > 0 ? "1px dashed #e2e8f0" : "none" }}>
-                              <span style={{ background: "#0369a1", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>{bin}</span>
-                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
-                            </td>
-                          </tr>
-                          {items.map((item, ii) => (
-                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
-                              <td style={{ padding: "5px 10px 5px 40px", color: "#cbd5e1", fontSize: "11px" }}>↳</td>
-                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}><CopyableHU value={item.huUnit} copiedKey={`bin-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} /></td>
-                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
-                              <td style={{ padding: "5px 10px" }}>
-                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
-                                  {item.category || "—"}
-                                </span>
-                              </td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
-                            </tr>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Rack-wise Allocation ──────────────────────────────────────── */}
-      {/* Only shows batches actually linked to a real provisioned Rack Bin (see inward.ts
-          commit route) — previously Rack/Row/Level data was never surfaced anywhere, only
-          the flat BIN string above, even when the Excel sheet's BIN column matched a real
-          rack bin code (e.g. "RA1-01"). */}
-      {rackAllocation.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-          <div style={{ fontSize: "10px", fontWeight: 800, color: "#7c2d12", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
-            <Grid3X3 size={12} /> Rack-wise Allocation
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-              <thead>
-                <tr>
-                  {[
-                    { h: "Bin",         align: "left"  },
-                    { h: "Material Code", align: "left" },
-                    { h: "Description", align: "left"  },
-                    { h: "HU Unit",     align: "left"  },
-                    { h: "Type",        align: "left"  },
-                    { h: "Category",    align: "left"  },
-                    { h: "Pallets",     align: "right" },
-                    { h: "Net Wt (kg)", align: "right" },
-                    { h: "Qty (Nos)",   align: "right" },
-                  ].map(({ h, align }) => (
-                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rackAllocation.map(({ rack, rows, totalPallets, totalKg, totalItems }, ri) => {
-                  const isOpen = expandedRacks.has(rack);
-                  return (
-                    <React.Fragment key={rack}>
-                      {/* ── Rack dropdown header ──────────── */}
-                      <tr
-                        onClick={() => toggleRack(rack)}
-                        style={{ background: "#fff7ed", cursor: "pointer" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#ffedd5"}
-                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#fff7ed"}
-                      >
-                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#c2410c", borderBottom: isOpen ? "1px solid #fed7aa" : "1px solid #e2e8f0", borderTop: ri > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                            <span style={{ fontSize: "11px", color: "#c2410c", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
-                            <span style={{ background: "#c2410c", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>Rack {rack}</span>
-                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
-                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
-                            </span>
-                          </span>
-                        </td>
-                      </tr>
-                      {/* ── Expanded: rows + bin + material rows ──────────── */}
-                      {isOpen && rows.map(({ row, pallets, kg, items }, rowi) => (
-                        <React.Fragment key={row}>
-                          <tr style={{ background: "#fffbeb" }}>
-                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#b45309", borderBottom: "1px solid #e2e8f0", borderTop: rowi > 0 ? "1px dashed #e2e8f0" : "none" }}>
-                              <span style={{ background: "#b45309", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>Row {row}</span>
-                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
-                            </td>
-                          </tr>
-                          {items.map((item, ii) => (
-                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
-                              <td style={{ padding: "5px 10px 5px 40px", color: "#7c2d12", fontWeight: 700, fontSize: "10px", whiteSpace: "nowrap" }}>{item.rackBinCode || "—"}</td>
-                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}><CopyableHU value={item.huUnit} copiedKey={`rack-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} /></td>
-                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
-                              <td style={{ padding: "5px 10px" }}>
-                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
-                                  {item.category || "—"}
-                                </span>
-                              </td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
-                            </tr>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Floor-wise Allocation ─────────────────────────────────────── */}
-      {floorAllocation.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "14px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-          <div style={{ fontSize: "10px", fontWeight: 800, color: "#1e3a8a", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
-            <Grid3X3 size={12} /> Floor-wise Allocation
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-              <thead>
-                <tr>
-                  {[
-                    { h: "Floor Code",  align: "left"  },
-                    { h: "Material Code", align: "left" },
-                    { h: "Description", align: "left"  },
-                    { h: "HU Unit",     align: "left"  },
-                    { h: "Type",        align: "left"  },
-                    { h: "Category",    align: "left"  },
-                    { h: "Pallets",     align: "right" },
-                    { h: "Net Wt (kg)", align: "right" },
-                    { h: "Qty (Nos)",   align: "right" },
-                  ].map(({ h, align }) => (
-                    <th key={h} style={{ padding: "7px 10px", textAlign: align as any, fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.07em", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {floorAllocation.map(({ zone, codes, totalPallets, totalKg, totalItems }, zi) => {
-                  const isOpen = expandedFloorZones.has(zone);
-                  return (
-                    <React.Fragment key={zone}>
-                      {/* ── Floor zone dropdown header ──────────── */}
-                      <tr
-                        onClick={() => toggleFloorZone(zone)}
-                        style={{ background: "#eff6ff", cursor: "pointer" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = "#dbeafe"}
-                        onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = "#eff6ff"}
-                      >
-                        <td colSpan={9} style={{ padding: "7px 12px", fontWeight: 800, fontSize: "12px", color: "#1e40af", borderBottom: isOpen ? "1px solid #bfdbfe" : "1px solid #e2e8f0", borderTop: zi > 0 ? "2px solid #e2e8f0" : "none", userSelect: "none" }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                            <span style={{ fontSize: "11px", color: "#1e40af", lineHeight: 1 }}>{isOpen ? "▾" : "▸"}</span>
-                            <span style={{ background: "#1e40af", color: "#fff", padding: "2px 10px", borderRadius: "4px", fontSize: "10px", letterSpacing: "0.06em" }}>Zone {zone}</span>
-                            <span style={{ color: "#6b7280", fontWeight: 600, fontSize: "10px" }}>
-                              {totalPallets.toFixed(0)} pallets · {totalKg.toFixed(0)} kg · {totalItems} item{totalItems !== 1 ? "s" : ""}
-                            </span>
-                          </span>
-                        </td>
-                      </tr>
-                      {/* ── Expanded: floor code + material rows ──────────── */}
-                      {isOpen && codes.map(({ code, pallets, kg, items }, ci) => (
-                        <React.Fragment key={code}>
-                          <tr style={{ background: "#f8fafc" }}>
-                            <td colSpan={9} style={{ padding: "4px 10px 4px 28px", fontWeight: 700, fontSize: "10px", color: "#334155", borderBottom: "1px solid #e2e8f0", borderTop: ci > 0 ? "1px dashed #e2e8f0" : "none" }}>
-                              <span style={{ background: "#334155", color: "#fff", padding: "1px 7px", borderRadius: "4px", marginRight: "8px", fontSize: "9px" }}>{code}</span>
-                              <span style={{ color: "#94a3b8", fontWeight: 600 }}>{pallets.toFixed(0)} pallets · {kg.toFixed(0)} kg · {items.length} item{items.length !== 1 ? "s" : ""}</span>
-                            </td>
-                          </tr>
-                          {items.map((item, ii) => (
-                            <tr key={item.id} style={{ background: ii % 2 === 0 ? "#fff" : "#fafafa" }}>
-                              <td style={{ padding: "5px 10px 5px 40px", color: "#cbd5e1", fontSize: "11px" }}>↳</td>
-                              <td style={{ padding: "5px 10px", fontFamily: "monospace", fontWeight: 700, color: "#1e40af", fontSize: "11px", whiteSpace: "nowrap" }}>{item.material?.code || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "normal", wordBreak: "break-word", maxWidth: "200px" }}>{item.material?.description || "—"}</td>
-                              <td style={{ padding: "5px 10px", color: "#7c3aed", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}><CopyableHU value={item.huUnit} copiedKey={`floor-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} /></td>
-                              <td style={{ padding: "5px 10px", color: "#0891b2", fontWeight: 600, fontSize: "11px", whiteSpace: "nowrap" }}>{item.materialType || "—"}</td>
-                              <td style={{ padding: "5px 10px" }}>
-                                <span style={{ background: item.category.includes("FG") ? "#f5f3ff" : "#ecfdf5", color: item.category.includes("FG") ? "#7c3aed" : "#059669", border: `1px solid ${item.category.includes("FG") ? "#ddd6fe" : "#a7f3d0"}`, padding: "1px 6px", borderRadius: "10px", fontSize: "10px", fontWeight: 700 }}>
-                                  {item.category || "—"}
-                                </span>
-                              </td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{item.displayQtyPallet > 0 ? item.displayQtyPallet.toFixed(0) : "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{item.displayQtyKg > 0 ? item.displayQtyKg.toFixed(1) : "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", color: "#374151" }}>{item.displayQtyNos.toFixed(0)}</td>
-                            </tr>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* ── Controls ──────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
@@ -1730,6 +1658,42 @@ export default function InventoryClient() {
             {copiedKey === "bulk-hu-units" ? <Check size={13} /> : <Copy size={13} />}
             {copiedKey === "bulk-hu-units" ? `Copied ${copyableHUUnits.length} HU unit${copyableHUUnits.length !== 1 ? "s" : ""}` : `Copy HU Units (${copyableHUUnits.length})`}
           </button>
+        )}
+
+        {/* Copy just the checked HU units — tick boxes next to each HU Unit cell to build this */}
+        {selectedHUIds.size > 0 && (
+          <>
+            <button
+              onClick={() => handleCopyHU("selected-hu-units", selectedHUUnits.join("\n"))}
+              title="Copy only the HU units you've checked, one per line — paste into Outward Dispatch"
+              disabled={selectedHUUnits.length === 0}
+              style={{
+                display: "flex", alignItems: "center", gap: "6px",
+                padding: "7px 14px", background: copiedKey === "selected-hu-units" ? "#dcfce7" : "#ede9fe",
+                border: `1.5px solid ${copiedKey === "selected-hu-units" ? "#86efac" : "#c4b5fd"}`,
+                borderRadius: "8px", fontSize: "12px", fontWeight: 700,
+                color: copiedKey === "selected-hu-units" ? "#059669" : "#6d28d9",
+                cursor: selectedHUUnits.length === 0 ? "not-allowed" : "pointer",
+                opacity: selectedHUUnits.length === 0 ? 0.5 : 1,
+              }}
+            >
+              {copiedKey === "selected-hu-units" ? <Check size={13} /> : <Copy size={13} />}
+              {copiedKey === "selected-hu-units"
+                ? `Copied ${selectedHUUnits.length} selected HU unit${selectedHUUnits.length !== 1 ? "s" : ""}`
+                : `Copy Selected HU Units (${selectedHUIds.size})`}
+            </button>
+            <button
+              onClick={() => setSelectedHUIds(new Set())}
+              title="Clear HU unit selection"
+              style={{
+                display: "flex", alignItems: "center", gap: "4px",
+                padding: "7px 10px", background: "#fff", border: "1.5px solid #e2e8f0",
+                borderRadius: "8px", fontSize: "12px", fontWeight: 700, color: "#64748b", cursor: "pointer",
+              }}
+            >
+              <X size={13} /> Clear
+            </button>
+          </>
         )}
 
         <span style={{ fontSize: "12px", color: "#94a3b8", fontWeight: 600 }}>
@@ -1827,6 +1791,21 @@ export default function InventoryClient() {
                             <AlertTriangle size={9} /> Rectify
                           </span>
                         )}
+                        {disc && (
+                          <button
+                            onClick={e => autoRectify(item, e)}
+                            disabled={autoRectifyingId === item.id}
+                            title="One-click: set received = invoice qty and clear this discrepancy (skips the manual modal)"
+                            style={{ display: "inline-flex", alignItems: "center", gap: "3px",
+                                     fontSize: "9px", fontWeight: 800, color: "#fff",
+                                     background: autoRectifyingId === item.id ? "#86efac" : "#16a34a",
+                                     border: "none", padding: "3px 6px", borderRadius: "4px",
+                                     cursor: autoRectifyingId === item.id ? "not-allowed" : "pointer" }}>
+                            {autoRectifyingId === item.id
+                              ? <RefreshCw size={9} style={{ animation: "spin 1s linear infinite" }} />
+                              : <CheckCircle2 size={9} />} Auto-Rectify
+                          </button>
+                        )}
                       </div>
                     </td>
                     <td style={{ ...tdStyle, minWidth: "180px" }}>
@@ -1851,13 +1830,20 @@ export default function InventoryClient() {
                       {item.materialType || "—"}
                     </td>
                     <td style={{ ...tdStyle, fontSize: "11px", color: "#64748b" }}>
-                      <CopyableHU value={item.huUnit} copiedKey={`main-${item.id}`} activeKey={copiedKey} onCopy={handleCopyHU} />
+                      <CopyableHU
+                        value={item.huUnit}
+                        copiedKey={`main-${item.id}`}
+                        activeKey={copiedKey}
+                        onCopy={handleCopyHU}
+                        selected={selectedHUIds.has(item.id)}
+                        onToggleSelect={() => toggleHUSelect(item.id)}
+                      />
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: "#64748b" }}>
                       {item.invoiceNo !== "—" ? item.invoiceNo : "—"}
                     </td>
-                    <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: item.batchNumber ? "#374151" : "#cbd5e1" }}>
-                      {item.batchNumber || "—"}
+                    <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: item.realBatchNo ? "#374151" : "#cbd5e1" }}>
+                      {item.realBatchNo || "—"}
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "11px", color: item.sapDocNo ? "#374151" : "#cbd5e1" }}>
                       {item.sapDocNo || "—"}
@@ -1933,9 +1919,20 @@ export default function InventoryClient() {
                         {item.stockStatus}
                       </span>
                     </td>
-                    <td style={{ ...tdStyle, textAlign: "center", width: "80px" }}>
+                    <td style={{ ...tdStyle, textAlign: "center", width: "100px" }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
                         <span style={{ color: "#94a3b8" }}><Edit3 size={13} /></span>
+                        {!isViewer && item.quantity > 0 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setDamageItem(item); }}
+                            title="Mark part of this batch as damaged"
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "#fdba74", padding: "2px", display: "flex", alignItems: "center", borderRadius: "4px", transition: "color 0.1s" }}
+                            onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = "#ea580c")}
+                            onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = "#fdba74")}
+                          >
+                            <PackageX size={12} />
+                          </button>
+                        )}
                         {!isViewer && (
                           <button
                             onClick={(e) => handleDelete(item.id, e)}

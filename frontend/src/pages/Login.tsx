@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
+
 export default function Login() {
   const login = useAuthStore(s => s.login);
   const [username, setUsername] = useState('');
@@ -13,7 +15,7 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:5001/api/auth/login', {
+      const res = await fetch(`${API}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -157,35 +159,6 @@ export default function Login() {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
-
-        {/* Demo credentials */}
-        <div style={{
-          marginTop: '28px',
-          background: '#f8fafc',
-          border: '1px solid #e2e8f0',
-          borderRadius: '10px',
-          padding: '14px 16px',
-        }}>
-          <p style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Demo Credentials
-          </p>
-          {[
-            { user: 'admin',       pass: 'admin123',   label: 'Admin',              role: 'Admin'    },
-            { user: 'chennaippd',  pass: 'chennai123', label: 'Chennai Worker PPD', role: 'Worker'   },
-          ].map(c => (
-            <div
-              key={c.user}
-              onClick={() => { setUsername(c.user); setPassword(c.pass); }}
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', padding: '4px 0', fontSize: '12px', gap: '8px' }}
-            >
-              <span style={{ color: '#2563eb', fontWeight: 600, minWidth: 90 }}>{c.user}</span>
-              <span style={{ color: '#64748b', flex: 1 }}>{c.label}</span>
-              <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{c.pass}</span>
-              <span style={{ color: '#64748b', background: '#e2e8f0', borderRadius: '4px', padding: '1px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{c.role}</span>
-            </div>
-          ))}
-          <p style={{ fontSize: '10px', color: '#94a3b8', marginTop: '6px' }}>Click a row to auto-fill</p>
-        </div>
       </div>
     </div>
   );

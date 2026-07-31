@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { useAuthStore, whQuery } from '../store/authStore';
 
-const API = 'http://localhost:5001/api';
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
 
 export default function Dashboard() {
   const user          = useAuthStore(s => s.user);
@@ -76,7 +76,7 @@ export default function Dashboard() {
     ? `${selectedWorker.name}'s Dashboard`
     : 'Operations Dashboard';
   const viewSubtitle = selectedWorker
-    ? `Warehouse: ${selectedWorker.warehouseCode || 'N/A'} · ${selectedWorker.location}`
+    ? `Warehouse: ${selectedWorker.warehouseCode || (selectedWorker.warehouseCodes?.length ? selectedWorker.warehouseCodes.join(', ') : 'N/A')} · ${selectedWorker.location}`
     : new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
   return (

@@ -1,14 +1,15 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import fs from 'fs';
 import path from 'path';
+import { resolveScopedCodes, FORBIDDEN_CODE } from '../middleware/auth';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // ── Load worker users from auth files ────────────────────────────────────────
 function getWorkerUsers() {
-  const USERS_FILE = path.join(__dirname, '../../dynamic-users.json');
+  // See the matching DATA_DIR comment in routes/auth.ts — must resolve to the same file.
+  const USERS_FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '../..'), 'dynamic-users.json');
   const BASE: any[] = [
     { username: 'chennaippd', name: 'Chennai Worker PPD', role: 'WORKER', location: 'Chennai PPD', warehouseCode: 'CM35' },
   ];
@@ -132,13 +133,45 @@ function mergeStats(list: any[]) {
   return out;
 }
 
+// An all-zero dashboard shape, returned when a CUSTOMER/WORKER's scope doesn't
+// cover anything they asked for (e.g. requested a warehouseCode outside their
+// account) — never falls through to the unrestricted "no filter" branch below.
+function emptyStats() {
+  return {
+    todaysInward: 0, todaysOutward: 0, recentInwards: [],
+    inventoryRM: 0, inventoryFG: 0, inventoryRMPallets: 0, inventoryFGPallets: 0,
+    totalPallets: 0, totalQty: 0, discrepancyCount: 0, discrepancyByCategory: [],
+    stockLocations: [], rmByType: [], binStats: {},
+    warehouseBreakdown: [], pendingCycleCounts: 0,
+  };
+}
+
 router.get('/', async (req, res) => {
   try {
-    const wc = (req.query.warehouseCode as string | undefined)?.trim().toUpperCase();
+    let wc = (req.query.warehouseCode as string | undefined)?.trim().toUpperCase();
     const warehouseCodesRaw = req.query.warehouseCodes as string | undefined;
-    const codeList = warehouseCodesRaw
+    let codeList = warehouseCodesRaw
       ? warehouseCodesRaw.split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
       : [];
+
+    // Server-side enforcement: clamp to req.user's own scope for CUSTOMER/WORKER
+    // accounts (ADMIN passes through unrestricted). Never trust the client here.
+    const requested = codeList.length ? codeList : (wc ? [wc] : []);
+    const scoped = resolveScopedCodes(req, requested);
+    if (scoped.includes(FORBIDDEN_CODE)) {
+      return res.json(emptyStats());
+    }
+    if (scoped.length > 1) {
+      codeList = scoped;
+      wc = undefined;
+    } else if (scoped.length === 1) {
+      codeList = [];
+      wc = scoped[0];
+    } else {
+      codeList = [];
+      // wc stays as originally requested (empty here only reachable for ADMIN)
+    }
+
     if (codeList.length) {
       const whs = await prisma.warehouse.findMany({ where: { code: { in: codeList } } });
       const perWh = await Promise.all(whs.map(w => getStatsForWarehouse(w.id, w.code)));
@@ -153,9 +186,9 @@ router.get('/', async (req, res) => {
         const ids = whs.map(w => w.id);
         if (ids.length) {
           const rows = await prisma.$queryRawUnsafe<[{count: any}]>(
-            `SELECT COUNT(*) as count FROM DailyCycleSession s JOIN WeeklyCycleTask t ON s.taskId = t.id
-             WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s.scheduledDate <= ?
-               AND t.status = 'ACTIVE' AND t.warehouseId IN (${ids.map(() => '?').join(',')})`,
+            `SELECT COUNT(*) as count FROM "DailyCycleSession" s JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
+             WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s."scheduledDate" <= $1
+               AND t.status = 'ACTIVE' AND t."warehouseId" IN (${ids.map((_, i) => `$${i + 2}`).join(',')})`,
             today, ...ids);
           pending = Number(rows[0]?.count ?? 0);
         }
@@ -177,10 +210,10 @@ router.get('/', async (req, res) => {
       const _n = new Date();
       const today = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
       const ccRows  = await prisma.$queryRawUnsafe<[{count: any}]>(
-        `SELECT COUNT(*) as count FROM DailyCycleSession s
-         JOIN WeeklyCycleTask t ON s.taskId = t.id
+        `SELECT COUNT(*) as count FROM "DailyCycleSession" s
+         JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
          WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS')
-           AND s.scheduledDate <= ?
+           AND s."scheduledDate" <= $1
            AND t.status = 'ACTIVE'`,
         today
       );

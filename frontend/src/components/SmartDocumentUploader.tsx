@@ -47,6 +47,16 @@ export default function SmartDocumentUploader({ onProcessComplete, expectedField
           const workbook = XLSX.read(buffer, { type: "array" });
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
           data = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+          // sheet_to_json returns a row object for every row in the sheet's used
+          // range, including trailing rows that are visually blank but still fall
+          // inside that range (stray formatting, leftover empty rows below the
+          // real data, etc.) — each comes back as an object of all-empty strings
+          // (because of defval: "") instead of being omitted. Left unfiltered,
+          // this is exactly what inflates the extracted count above the sheet's
+          // real row count (e.g. a 48-row sheet reading as 79). Drop any row
+          // where every column is blank, same as the backend's /inward/parse-excel
+          // endpoint already does via its own blankRowsSkipped filter.
+          data = data.filter((row: any) => Object.values(row).some((v: any) => String(v ?? '').trim() !== ''));
         }
 
         if (data.length > 0) {

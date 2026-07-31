@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { fetchCycleCountForCodes, type CycleCountRecord } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { Card, PageHeader, Spinner, EmptyState, thStyle, tdStyle, fmtDate, C, IconCycle, IconAlert, IconRefresh } from '../ui';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string; border: string }> = {
   PENDING:     { label: 'Pending',     color: '#d97706', bg: '#fffbeb', border: '#fde68a' },
@@ -42,13 +43,15 @@ export default function CycleCount() {
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState('');
 
-  const load = async () => {
-    setLoading(true); setError('');
+  const load = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError('');
     try { setRecords(await fetchCycleCountForCodes(codes)); }
     catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [selWorker, allowedCodes.join(',')]);
+  useLiveRefresh(() => load({ silent: true }));
 
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -80,7 +83,7 @@ export default function CycleCount() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input className="toolbar-input" value={q} onChange={e => setQ(e.target.value)} placeholder="Search week, warehouse…"
               style={{ padding: '9px 14px', border: `1.5px solid ${C.line}`, borderRadius: 10, fontSize: 13, width: 220, maxWidth: '100%', outline: 'none' }} />
-            <button onClick={load} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>
+            <button onClick={() => load()} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>
           </div>
         }
       />

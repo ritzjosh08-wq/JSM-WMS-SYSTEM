@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchInventoryForCodes, parseCF, type InventoryRow, type Warehouse } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { Card, PageHeader, Spinner, C, IconRefresh } from '../ui';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 // Mirrors the WMS software Inventory columns (read-only for customers).
 const th: React.CSSProperties = {
@@ -31,8 +32,9 @@ export default function Inventory() {
   const [statusF, setStatusF] = useState('');
   const [whF, setWhF] = useState('');
 
-  const load = async () => {
-    setLoading(true); setError('');
+  const load = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError('');
     try {
       const { inventory, warehouses } = await fetchInventoryForCodes(codes);
       setRows(inventory);
@@ -43,6 +45,9 @@ export default function Inventory() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [selWorker, allowedCodes.join(',')]);
+  // Background poll so inward/outward changes workers make in the WMS software
+  // show up here without the customer needing to reload the page.
+  useLiveRefresh(() => load({ silent: true }));
 
   const enriched = useMemo(() => rows.map(r => {
     const cf = parseCF(r.customFields);
@@ -127,7 +132,7 @@ export default function Inventory() {
       <PageHeader
         title={`${scopeName}'s Inventory`}
         subtitle={`Warehouse: ${scopeWh} · Live stock${updated ? ` · Updated ${updated.toLocaleTimeString()}` : ''}`}
-        right={<button onClick={load} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>}
+        right={<button onClick={() => load()} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>}
       />
 
       {/* Summary cards */}

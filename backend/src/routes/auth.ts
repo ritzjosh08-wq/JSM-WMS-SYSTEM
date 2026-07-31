@@ -1,20 +1,66 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
-const JWT_SECRET: string = process.env.JWT_SECRET || 'insecure-dev-secret-change-me';
+// ── Brute-force protection for /login ───────────────────────────────────────
+// Two layers: an IP-based rate limit (blocks a single source hammering the endpoint,
+// e.g. a script trying many passwords fast) and a per-account lockout (blocks repeated
+// guessing against one specific username even if attempts are spread across IPs/time).
+// Both are in-memory, which is fine for a small single-instance deployment like this one —
+// if this ever runs as multiple backend instances behind a load balancer, move this to Redis
+// or the database so the counters are shared.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 20,                 // 20 attempts per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts from this device. Please wait a few minutes and try again.' },
+});
+
+const FAILED_ATTEMPTS = new Map<string, { count: number; lockedUntil: number }>();
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+function getLoginState(username: string) {
+  return FAILED_ATTEMPTS.get(username) || { count: 0, lockedUntil: 0 };
+}
+function recordFailedLogin(username: string) {
+  const state = getLoginState(username);
+  state.count += 1;
+  if (state.count >= MAX_FAILED_ATTEMPTS) {
+    state.lockedUntil = Date.now() + LOCKOUT_MS;
+    state.count = 0;
+  }
+  FAILED_ATTEMPTS.set(username, state);
+}
+function clearFailedLogins(username: string) {
+  FAILED_ATTEMPTS.delete(username);
+}
+
+// See middleware/auth.ts for why there is no fallback default here — same reasoning applies.
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET is missing or too short. See middleware/auth.ts for how to generate one.');
+}
+const JWT_SECRET: string = process.env.JWT_SECRET;
 const TOKEN_TTL = '12h';
 
 // ── Persistence files ────────────────────────────────────────────────────────
-const PERMS_FILE  = path.join(__dirname, '../../customer-permissions.json');
-const USERS_FILE  = path.join(__dirname, '../../dynamic-users.json');
+// These two JSON files are the only backend state that lives outside PostgreSQL. On a
+// host with an ephemeral filesystem (most PaaS container platforms wipe local disk on every
+// deploy/restart), writes here would silently vanish — any admin-created worker/customer
+// account or saved permission would be lost on the next deploy. DATA_DIR lets ops point
+// these at a persistent volume (e.g. a Render Disk mounted at /data) without changing any
+// behavior for local dev, where it's unset and these fall back to their original location.
+const DATA_DIR    = process.env.DATA_DIR || path.join(__dirname, '../..');
+const PERMS_FILE  = path.join(DATA_DIR, 'customer-permissions.json');
+const USERS_FILE  = path.join(DATA_DIR, 'dynamic-users.json');
 
 function loadCustomerPerms(): Record<string, string[]> {
   try {
@@ -76,20 +122,28 @@ function saveDynamicUsers(users: UserRecord[]) {
 }
 
 // ─── Built-in accounts ────────────────────────────────────────────────────────
-// Passwords below are bcrypt hashes, NOT plaintext. Login still works with the same
-// plaintext passwords as before (admin123 / chennai123) — only the stored form changed,
-// verified via bcrypt.compareSync() in POST /login below.
-const HASH_ADMIN123   = '$2a$10$P0iIbwdPGYiV20gd5a4jW.cmBd74WbIhcrmSoEM5LjzG2HnY2rBb.';
-const HASH_CHENNAI123 = '$2a$10$I1c/b1FbD0viLFLDKCm87e/0sKf40o3/vpNMt/Yk1GJty1qwc7ZIy';
+// Passwords below are bcrypt hashes, NOT plaintext — and each account now has its OWN
+// unique password (previously all three chennai* accounts shared "chennai123", and admin
+// used the well-known "admin123"). Sharing one password across accounts means a leak of
+// any one of them compromises all of them; per-account passwords contain the blast radius.
+// The plaintext passwords are NOT in source control — they were generated once and handed
+// to the account owner directly. To rotate any of these, generate a new bcrypt hash (see
+// the note in middleware/auth.ts for a one-liner pattern) and swap it in here, or better,
+// use the Settings > Workers admin UI (POST /auth/users) which stores hashes the same way
+// but outside of source control entirely (dynamic-users.json, gitignored).
+const HASH_ADMIN       = '$2b$10$OhXjHeLWw6IpbQik2E0upuVJbVNdRp6j5VY6/oD4Vg6BSDGbMetjy';
+const HASH_CHENNAIPPD  = '$2a$10$Rh4VdN0axnCYeN4q6iQniOUgtE/sFtIuhLzp910r.ROS1.x5AmUiK'; // reset 2026-07-30 — new password: Chennai@PPD2026
+const HASH_CHENNAIFG05 = '$2b$10$u2zPFgNzm8SZWl5P.N3E1utX76AAJCK2aDtGkQrDr8cH/34jJG0AC';
+const HASH_CHENNAICUST = '$2b$10$4yNau6NpujixD1J6CmMdHeIWOziync34aMZCqXQ7rssaNymStqmDi';
 const BASE_USERS: UserRecord[] = [
-  { username: 'admin',       password: HASH_ADMIN123,   name: 'Admin',              role: 'ADMIN',    location: 'All Warehouses' },
+  { username: 'admin',       password: HASH_ADMIN,       name: 'Admin',              role: 'ADMIN',    location: 'All Warehouses' },
   // chennaippd is a common/shared worker who handles both warehouses, not just CM35 —
   // warehouseCodes gives their session combined access to CM35 + FG05 (see UserRecord comment
   // above and authStore.ts's login()). warehouseCode stays 'CM35' as their primary/default site
   // for anything that still expects a single code (e.g. the Worker directory badge).
-  { username: 'chennaippd',  password: HASH_CHENNAI123, name: 'Chennai Worker PPD',  role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'CM35', warehouseCodes: ['CM35', 'FG05'], task: 'Inward & Receiving' },
-  { username: 'chennaifg05', password: HASH_CHENNAI123, name: 'Chennai Worker FG05', role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'FG05', task: 'FG Storage & Dispatch' },
-  { username: 'chennaicust', password: HASH_CHENNAI123, name: 'Chennai PPD',         role: 'CUSTOMER', location: 'Chennai PPD' },
+  { username: 'chennaippd',  password: HASH_CHENNAIPPD,  name: 'Chennai Worker PPD',  role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'CM35', warehouseCodes: ['CM35', 'FG05'], task: 'Inward & Receiving' },
+  { username: 'chennaifg05', password: HASH_CHENNAIFG05, name: 'Chennai Worker FG05', role: 'WORKER',   location: 'Chennai PPD',  warehouseCode: 'FG05', task: 'FG Storage & Dispatch' },
+  { username: 'chennaicust', password: HASH_CHENNAICUST, name: 'Chennai PPD',         role: 'CUSTOMER', location: 'Chennai PPD' },
 ];
 
 function getAllUsers(): UserRecord[] {
@@ -99,15 +153,24 @@ function getAllUsers(): UserRecord[] {
 }
 
 // ── POST /auth/login ──────────────────────────────────────────────────────────
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
-  const user = getAllUsers().find(u => u.username === username.toLowerCase());
+  const normalizedUsername = String(username).toLowerCase();
+  const loginState = getLoginState(normalizedUsername);
+  if (loginState.lockedUntil > Date.now()) {
+    const minutesLeft = Math.ceil((loginState.lockedUntil - Date.now()) / 60000);
+    return res.status(429).json({ error: `Too many failed attempts. Try again in ${minutesLeft} minute(s).` });
+  }
+
+  const user = getAllUsers().find(u => u.username === normalizedUsername);
   if (!user || !bcrypt.compareSync(password, user.password)) {
+    recordFailedLogin(normalizedUsername);
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  clearFailedLogins(normalizedUsername);
   const scope = user.role === 'CUSTOMER' ? getCustomerScope(user.username) : null;
   // A WORKER shared across multiple warehouses (see UserRecord.warehouseCodes comment) carries
   // its own explicit list — separate from CUSTOMER's team-derived getCustomerScope() above,

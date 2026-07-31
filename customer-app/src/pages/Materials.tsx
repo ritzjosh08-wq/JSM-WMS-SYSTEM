@@ -5,6 +5,7 @@ import {
 } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { Card, PageHeader, Spinner, EmptyState, thStyle, tdStyle, C, IconBox, IconLayers, IconWeight, IconRefresh, IconMaterials } from '../ui';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 const PALETTE = ['#2563eb', '#7c3aed', '#059669', '#d97706', '#dc2626', '#0891b2', '#db2777', '#65a30d', '#4f46e5', '#0d9488'];
 
@@ -60,8 +61,9 @@ export default function Materials() {
   const [q, setQ] = useState('');
   const [view, setView] = useState<View>('week');
 
-  const load = async () => {
-    setLoading(true); setError('');
+  const load = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError('');
     try {
       const [m, invRes, inw, out] = await Promise.all([
         fetchMaterials(),
@@ -74,6 +76,7 @@ export default function Materials() {
     finally { setLoading(false); }
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [selWorker, allowedCodes.join(',')]);
+  useLiveRefresh(() => load({ silent: true }));
 
   // RM composition by material type
   const rmTypes = useMemo(() => {
@@ -132,7 +135,7 @@ export default function Materials() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input className="toolbar-input" value={q} onChange={e => setQ(e.target.value)} placeholder="Search code or description…"
               style={{ padding: '9px 14px', border: `1.5px solid ${C.line}`, borderRadius: 10, fontSize: 13, width: 220, maxWidth: '100%', outline: 'none' }} />
-            <button onClick={load} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>
+            <button onClick={() => load()} className="btn btn-primary"><IconRefresh size={15} /> Refresh</button>
           </div>
         }
       />

@@ -248,7 +248,7 @@ export default function Sidebar() {
             boxShadow: "0 0 5px rgba(16,185,129,0.5)",
             flexShrink: 0,
           }} />
-          <span style={{ fontSize: "10px", color: "#94a3b8" }}>System Online · v2.0 · SQLite</span>
+          <span style={{ fontSize: "10px", color: "#94a3b8" }}>System Online · v2.0 · PostgreSQL</span>
         </div>
       </div>
     </aside>
