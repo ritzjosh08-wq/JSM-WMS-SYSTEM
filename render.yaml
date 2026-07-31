@@ -35,8 +35,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "5001"
+      # No PORT var here on purpose: Render injects its own PORT (health checks and
+      # routing expect the app on that port), and backend/src/index.ts already does
+      # `process.env.PORT || 5001`, so it picks up whatever Render assigns automatically.
       - key: DATABASE_URL
         sync: false   # paste the Supabase SESSION-pooler connection string (see .env.example)
       - key: JWT_SECRET
