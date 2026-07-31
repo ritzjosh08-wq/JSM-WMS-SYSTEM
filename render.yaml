@@ -15,7 +15,10 @@ services:
                             # always-on (no cold start) AND persistent dynamic-users.json.
     region: singapore      # pick the region closest to your Supabase project (ap-south-1/ap-southeast-2)
     rootDir: backend
-    buildCommand: npm install && npm run build
+    # --include=dev is required because NODE_ENV=production (set below) makes plain
+    # `npm install` skip devDependencies — but typescript/@types/* live there and are
+    # needed to build. This forces them in for the build step regardless.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     autoDeployTrigger: commit
