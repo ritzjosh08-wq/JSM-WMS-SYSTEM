@@ -10,27 +10,30 @@ services:
   - type: web
     name: jsm-logistics-backend
     runtime: node
-    plan: starter          # bump if you need more than 512MB RAM for large Excel imports
+    plan: free             # Render's free web service plan does NOT support persistent disks
+                            # (see note below) — bump to "starter" later if you want both
+                            # always-on (no cold start) AND persistent dynamic-users.json.
     region: singapore      # pick the region closest to your Supabase project (ap-south-1/ap-southeast-2)
     rootDir: backend
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /health
     autoDeployTrigger: commit
-    disk:
-      # Persistent disk for dynamic-users.json / customer-permissions.json — the only backend
-      # state that lives outside Postgres. Without this, Render's ephemeral filesystem would
-      # wipe admin-created worker/customer accounts and saved permissions on every deploy.
-      name: jsm-backend-data
-      mountPath: /data
-      sizeGB: 1
+    # No `disk:` block here — free web services can't attach a persistent disk on Render.
+    # Practical effect: `dynamic-users.json` / `customer-permissions.json` (admin-created
+    # worker/customer accounts beyond the built-in ones, and any custom permission overrides)
+    # live on the free instance's normal filesystem instead, which resets on every redeploy
+    # and on the free plan's spin-down/restart cycle. All real inventory/inward/outward/
+    # damage/etc. data is in Supabase Postgres and is completely unaffected — only those two
+    # JSON-file-backed extras would need re-creating after a restart. Upgrading to the
+    # "starter" plan later re-enables a persistent disk (add back the `disk:` block from
+    # backend/DEPLOYMENT.md's git history, or ask to have it re-added) if this becomes a
+    # real problem.
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: "5001"
-      - key: DATA_DIR
-        value: /data
       - key: DATABASE_URL
         sync: false   # paste the Supabase SESSION-pooler connection string (see .env.example)
       - key: JWT_SECRET

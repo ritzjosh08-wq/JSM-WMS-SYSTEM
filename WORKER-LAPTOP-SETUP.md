@@ -1,5 +1,11 @@
 # Getting the WMS onto a worker's laptop (no Netlify)
 
+> **Update:** the backend is now being deployed to Render (see `backend/DEPLOYMENT.md`) so it
+> runs 24/7 without depending on your laptop. Once that's live, you can skip the ngrok/tunnel
+> steps below entirely — just point `frontend/.env.worker` at your Render URL instead, and
+> stop running `start-tunnel-ngrok.bat`. Everything else here (the Cloudflare Pages link,
+> `build-worker-app.bat`) still applies the same way.
+
 ## What this actually does
 
 The backend (Node/Express + Prisma + your Supabase database) keeps running exactly

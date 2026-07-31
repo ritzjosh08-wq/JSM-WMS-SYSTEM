@@ -1,40 +1,49 @@
-# Backend Deployment — Render (replaces Railway)
+# Backend Deployment — Render
 
 The database does not move. Supabase Postgres stays exactly as it is; only the Node/Express
-API's *hosting* changes, from Railway to Render.
+API's *hosting* changes — from your laptop (the ngrok-tunneled setup in
+`WORKER-LAPTOP-SETUP.md`) to Render, so it's reachable 24/7 without your laptop needing to be
+on. Everything below is on Render's **free** plan, per your choice — see the cold-start note
+in step 6.
 
 ## One-time setup
 
-1. **Push this repo to GitHub** (Render deploys from a git repo, same as Railway did).
-2. In the Render dashboard: **New → Blueprint**, point it at this repo. Render will read
-   `render.yaml` at the repo root and create the `jsm-logistics-backend` web service plus its
-   1GB persistent disk automatically.
+1. **Push this repo to GitHub** if you haven't already (Render deploys from a git repo) —
+   `git status` should show a clean working tree and `origin/main` up to date.
+2. In the Render dashboard (https://dashboard.render.com, free account): **New → Blueprint**,
+   point it at this repo. Render reads `render.yaml` at the repo root and creates the
+   `jsm-logistics-backend` web service on the free plan automatically.
 3. Open the new service → **Environment** tab and set the three secrets that `render.yaml`
-   deliberately leaves blank (`sync: false`):
-   - `DATABASE_URL` — the **same** Supabase session-pooler connection string already used on
-     Railway (Supabase → Project Settings → Database → Connection string → "Session pooler").
-     Copy the value from Railway's current env vars if you don't have it handy.
-   - `JWT_SECRET` — reuse the exact same value currently set on Railway. **Do not generate a
-     new one** — every currently logged-in user's token, and anyone with a saved session,
-     would be invalidated at once (forced re-login for everyone) if the secret changes.
-   - `CORS_ORIGIN` — the deployed frontend origin(s), e.g.
-     `https://your-staff-app.netlify.app,https://your-customer-portal.netlify.app`
-4. **Copy over the two runtime data files** (these are gitignored — they only exist on disk,
-   not in the repo, so they don't come across automatically):
-   - `backend/dynamic-users.json`
-   - `backend/customer-permissions.json`
-   Use Render's **Shell** tab on the new service (or a one-off SSH session) to `cat >` these
-   two files into `/data/dynamic-users.json` and `/data/customer-permissions.json` — the
-   persistent disk `render.yaml` mounts there. Skipping this step just means any admin-created
-   worker/customer accounts beyond the 4 built-in ones start empty on the new host; nothing
-   breaks, but those accounts would need to be re-created.
+   deliberately leaves blank (`sync: false`) — copy these straight from your local
+   `backend/.env` (same file this whole session has been running against):
+   - `DATABASE_URL` — the exact value from `backend/.env`'s `DATABASE_URL` line (the Supabase
+     session-pooler connection string).
+   - `JWT_SECRET` — the exact value from `backend/.env`'s `JWT_SECRET` line. **Do not generate
+     a new one** — every currently logged-in user's session would be invalidated at once
+     (forced re-login for everyone) if the secret changes.
+   - `CORS_ORIGIN` — copy the current value from `backend/.env`, then add the worker app's
+     Cloudflare Pages link (`https://your-project.pages.dev`) — though the backend code
+     already accepts any `*.pages.dev` origin automatically, so this is mostly for the exact
+     origins (Netlify links, localhost dev ports) already in that list.
+4. **Free plan has no persistent disk** (see `render.yaml`'s comment) — skip copying
+   `dynamic-users.json`/`customer-permissions.json` over; they'll just start empty on Render
+   and reset on redeploys/restarts. This only affects admin-created worker/customer accounts
+   beyond the 4 built-in ones and custom permission overrides — all real inventory data is in
+   Supabase Postgres and is unaffected. Re-create any such accounts after each reset, or ask to
+   move that data into Postgres properly later if this becomes a hassle.
 5. Trigger the first deploy. Build runs `npm install && npm run build`
    (`prisma generate && tsc`); start runs `npm start` (`node dist/index.js`).
-6. Confirm `https://<your-service>.onrender.com/health` returns `{"status":"ok"}`.
-7. Point your frontend's API base URL at the new Render URL (this is the one unavoidable
-   frontend-adjacent change — an *environment variable/config value*, not a code change — see
-   note at the bottom).
-8. Once the new backend is verified working end-to-end, decommission the Railway service.
+6. Confirm `https://<your-service>.onrender.com/health` returns `{"status":"ok"}`. First
+   request after 15 minutes of no traffic takes 30-60 seconds (free plan spin-down) — this is
+   expected, not an error. Optional mitigation: a free uptime monitor (e.g.
+   https://uptimerobot.com) pinging that `/health` URL every 10 minutes keeps it from ever
+   spinning down, at the cost of using more of the free plan's monthly instance hours.
+7. Point your frontend's `VITE_API_BASE` at the new Render URL — this replaces the ngrok
+   tunnel URL in `frontend/.env.worker` (and `frontend/.env.production` for the customer app,
+   if that's still in use). Rebuild/re-upload the worker app (`build-worker-app.bat` →
+   Cloudflare Pages) once this changes.
+8. Once confirmed working, you can stop running `start-tunnel-ngrok.bat` — it's no longer
+   needed. `start-app.bat` is still useful for your own local dev/testing.
 
 ## Ongoing deploys
 
