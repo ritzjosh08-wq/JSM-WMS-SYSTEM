@@ -15,6 +15,137 @@ import { parentPort, workerData } from 'worker_threads';
 
 let XLSX: any = null;
 try { XLSX = require('xlsx'); } catch { /* xlsx not installed yet */ }
+let fflate: any = null;
+try { fflate = require('fflate'); } catch { /* fflate not installed yet — fast path below just won't run */ }
+
+const DATE_TAB = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/;
+function tabDateValue(name: string): number | null {
+  const m = DATE_TAB.exec(name.trim());
+  if (!m) return null;
+  const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+// Same rule the slow path below uses to pick a sheet out of a list of names — pulled out so
+// both paths share identical selection behavior instead of two copies that could drift apart.
+function chooseSheetName(sheetNames: string[], fileName: string | undefined): string {
+  let chosen = sheetNames[0];
+  const dateTabs = sheetNames.filter((n) => tabDateValue(n) !== null);
+  if (dateTabs.length) {
+    const filenameDateStr = fileName ? String(fileName).match(/\d{1,2}[-/.]\d{1,2}[-/.]\d{4}/)?.[0] : undefined;
+    const filenameDateValue = filenameDateStr ? tabDateValue(filenameDateStr) : null;
+    const matchedFromFilename = filenameDateValue !== null
+      ? dateTabs.find((n) => tabDateValue(n) === filenameDateValue)
+      : undefined;
+    chosen = matchedFromFilename || dateTabs.reduce((latest, n) =>
+      (tabDateValue(n) as number) > (tabDateValue(latest) as number) ? n : latest, dateTabs[0]);
+  }
+  return chosen;
+}
+
+// ── Fast path: extract ONLY the one sheet we need straight from the zip ───────────────────
+// `XLSX.read()` — even with `bookSheets: true` or a `sheets: [...]` filter — turns out to
+// still inflate every internal XML part of the archive up front (confirmed against a real
+// 47MB / 76-tab "one sheet per date" godown-sheet export: `bookSheets: true` alone already
+// balloons to ~930MB RSS before a single cell is parsed). On a 512MB-RAM host (Render's
+// free/starter web service plans) that's an out-of-memory kill mid-request — the browser
+// just sees "Failed to fetch" with no real error surfaced anywhere.
+// This reads the zip's central directory (near-free) and selectively inflates only:
+//   1. xl/workbook.xml + xl/_rels/workbook.xml.rels + [Content_Types].xml — a few KB, to get
+//      the sheet name -> internal file (e.g. "worksheets/sheet51.xml") mapping.
+//   2. The ONE chosen sheet's XML, plus xl/sharedStrings.xml / xl/styles.xml if present.
+// Then it repackages just those parts into a tiny synthetic .xlsx (one sheet only) and hands
+// THAT to XLSX.read() — so XLSX's own inflate cost is now proportional to one sheet, not 76.
+// Falls back to the slow path (below) on any failure — this must never be the reason a normal
+// file fails to import.
+function tryFastExtractSheet(buf: Buffer, fileName: string | undefined): { chosenSheetName: string; ws: any } | null {
+  if (!fflate) return null;
+  try {
+    const zipBytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    const metaWanted = new Set(['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', '[Content_Types].xml']);
+    const meta = fflate.unzipSync(zipBytes, { filter: (f: any) => metaWanted.has(f.name) });
+    if (!meta['xl/workbook.xml'] || !meta['xl/_rels/workbook.xml.rels']) return null;
+
+    const workbookXml = Buffer.from(meta['xl/workbook.xml']).toString('utf8');
+    const relsXml = Buffer.from(meta['xl/_rels/workbook.xml.rels']).toString('utf8');
+    // Sheet tags can list name/r:id attributes in either order — match generically then pull
+    // each attribute out separately rather than assuming a fixed order.
+    const sheetTags = [...workbookXml.matchAll(/<sheet\b[^>]*\/>/g)].map(m => m[0]);
+    const sheetEntries = sheetTags.map(tag => {
+      const name = tag.match(/name="([^"]*)"/)?.[1];
+      const rid = tag.match(/r:id="([^"]*)"/)?.[1];
+      return name && rid ? { name, rid } : null;
+    }).filter((x): x is { name: string; rid: string } => !!x);
+    if (!sheetEntries.length) return null;
+
+    const relMatches = [...relsXml.matchAll(/<Relationship\b[^>]*\/>/g)].map(m => m[0]);
+    const ridToTarget: Record<string, string> = {};
+    relMatches.forEach(tag => {
+      const id = tag.match(/Id="([^"]*)"/)?.[1];
+      const target = tag.match(/Target="([^"]*)"/)?.[1];
+      if (id && target) ridToTarget[id] = target;
+    });
+
+    const sheetNames = sheetEntries.map(s => s.name);
+    const chosenSheetName = chooseSheetName(sheetNames, fileName);
+    const chosenEntry = sheetEntries.find(s => s.name === chosenSheetName);
+    const rawTarget = chosenEntry && ridToTarget[chosenEntry.rid];
+    if (!rawTarget) return null;
+    // Target is relative to xl/ (e.g. "worksheets/sheet51.xml"); normalize a couple of the
+    // other forms real exporters occasionally use (leading "/xl/..." or "xl/...").
+    const sheetPath = rawTarget.startsWith('/xl/') ? rawTarget.slice(1)
+      : rawTarget.startsWith('xl/') ? rawTarget
+      : `xl/${rawTarget}`;
+
+    const partsWanted = new Set([sheetPath, 'xl/sharedStrings.xml', 'xl/styles.xml']);
+    const parts = fflate.unzipSync(zipBytes, { filter: (f: any) => partsWanted.has(f.name) });
+    if (!parts[sheetPath]) return null;
+
+    const sheetFileName = sheetPath.split('/').pop();
+    const hasStrings = !!parts['xl/sharedStrings.xml'];
+    const hasStyles = !!parts['xl/styles.xml'];
+
+    const miniWorkbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+      `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+      `<sheets><sheet name="${chosenSheetName.replace(/"/g, '&quot;')}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+    const miniRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/${sheetFileName}"/>` +
+      (hasStrings ? `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>` : '') +
+      (hasStyles ? `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` : '') +
+      `</Relationships>`;
+    const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+      `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/${sheetFileName}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      (hasStrings ? `<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>` : '') +
+      (hasStyles ? `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` : '') +
+      `</Types>`;
+    const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>` +
+      `</Relationships>`;
+
+    const zipInput: Record<string, Uint8Array> = {
+      '[Content_Types].xml': new TextEncoder().encode(contentTypesXml),
+      '_rels/.rels': new TextEncoder().encode(rootRelsXml),
+      'xl/workbook.xml': new TextEncoder().encode(miniWorkbookXml),
+      'xl/_rels/workbook.xml.rels': new TextEncoder().encode(miniRelsXml),
+      [`xl/worksheets/${sheetFileName}`]: parts[sheetPath],
+    };
+    if (hasStrings) zipInput['xl/sharedStrings.xml'] = parts['xl/sharedStrings.xml'];
+    if (hasStyles) zipInput['xl/styles.xml'] = parts['xl/styles.xml'];
+
+    const miniZip = fflate.zipSync(zipInput, { level: 0 });
+    const wb = XLSX.read(Buffer.from(miniZip), { type: 'buffer', raw: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return null;
+    return { chosenSheetName, ws };
+  } catch {
+    return null; // any surprise in a real-world file's XML -> just fall back to the slow path
+  }
+}
 
 function excelSerialToDate(serial: number): string {
   const intSerial = Math.floor(serial);
@@ -70,18 +201,7 @@ function run() {
 
     const buf = Buffer.from(fileBase64, 'base64');
 
-    // ── Read sheet NAMES only first (cheap — skips parsing any cell data) ─────────────
-    // A plain `XLSX.read(buf)` parses every sheet's full cell data up front, even though we
-    // only ever need ONE sheet below. That's harmless for a normal single-sheet file, but a
-    // real 40-50MB multi-tab "one sheet per date" workbook (76 tabs x up to ~6,800 rows each)
-    // blew straight through this worker's 512MB heap ceiling parsing all 76 tabs just to read
-    // the one the code actually wanted — failing the whole upload with a generic "too large"
-    // error even though the ONE sheet we need is a perfectly normal size. `bookSheets: true`
-    // reads only the workbook's sheet list (a few KB of metadata), not any cell data, so this
-    // first pass costs a couple of seconds and ~15MB regardless of file size.
-    const wbNamesOnly = XLSX.read(buf, { type: 'buffer', bookSheets: true });
-
-    // ── Sheet selection ──────────────────────────────────────────────────────────────
+    // ── Sheet selection + extraction ───────────────────────────────────────────────────
     // Some real warehouse workbooks (e.g. daily "godown sheet" exports) keep one sheet PER
     // DATE, tab-named like "28-07-2026", instead of one sheet total — a single such workbook
     // can hold 70+ dated snapshots. Always taking SheetNames[0] happened to work before only
@@ -89,42 +209,25 @@ function run() {
     // side effect of Excel tab order, not a reliable rule, and it silently produces the wrong
     // day's data the moment tabs get reordered or a specific archived file
     // (e.g. "Warehouse Stock 01-06-2026.xlsx") is expected to load ITS OWN 01-06-2026 tab
-    // rather than whatever tab happens to be first.
-    //   1. If the uploaded filename contains a DD-MM-YYYY (or D-M-YYYY) date that exactly
-    //      matches one of the sheet tab names, use that sheet — the file is presumably named
-    //      for the snapshot it's meant to represent.
-    //   2. Else, if two or more tabs are themselves named as dates, use the most recent one
-    //      (the natural "current stock" reading of a dated-tabs workbook).
-    //   3. Else (the common case — a normal single/few-sheet template), fall back to the
-    //      original behavior: the first sheet. No change for any file that isn't structured
-    //      like this.
-    const DATE_TAB = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/;
-    const tabDateValue = (name: string): number | null => {
-      const m = DATE_TAB.exec(name.trim());
-      if (!m) return null;
-      const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
-      return isNaN(d.getTime()) ? null : d.getTime();
-    };
-    let chosenSheetName = wbNamesOnly.SheetNames[0];
-    const dateTabs = wbNamesOnly.SheetNames.filter((n: string) => tabDateValue(n) !== null);
-    if (dateTabs.length) {
-      // Pull a bare DD-MM-YYYY (or D/M/YYYY, D.M.YYYY) substring out of the filename, if any
-      // — e.g. "Warehouse Stock 01-06-2026.xlsx" -> "01-06-2026".
-      const filenameDateStr = fileName ? String(fileName).match(/\d{1,2}[-/.]\d{1,2}[-/.]\d{4}/)?.[0] : undefined;
-      const filenameDateValue = filenameDateStr ? tabDateValue(filenameDateStr) : null;
-      const matchedFromFilename = filenameDateValue !== null
-        ? dateTabs.find((n: string) => tabDateValue(n) === filenameDateValue)
-        : undefined;
-      chosenSheetName = matchedFromFilename || dateTabs.reduce((latest: string, n: string) =>
-        (tabDateValue(n) as number) > (tabDateValue(latest) as number) ? n : latest, dateTabs[0]);
+    // rather than whatever tab happens to be first. See chooseSheetName() above for the rule.
+    //
+    // Try the fast, low-memory path first (see tryFastExtractSheet above) — it selectively
+    // inflates only the one sheet we need straight from the zip. Only fall back to the slow
+    // path (full XLSX.read of the whole workbook) if that didn't work for any reason, so
+    // normal files are never put at risk by this optimization.
+    const fast = tryFastExtractSheet(buf, fileName);
+    let chosenSheetName: string;
+    let ws: any;
+    if (fast) {
+      ({ chosenSheetName, ws } = fast);
+    } else {
+      // ── Slow path: read sheet NAMES only first (cheap for most files — skips cell data) ──
+      const wbNamesOnly = XLSX.read(buf, { type: 'buffer', bookSheets: true });
+      chosenSheetName = chooseSheetName(wbNamesOnly.SheetNames, fileName);
+      // ── Parse ONLY the chosen sheet's cell data ─────────────────────────────────────
+      const wb = XLSX.read(buf, { type: 'buffer', raw: true, sheets: [chosenSheetName] });
+      ws = wb.Sheets[chosenSheetName];
     }
-
-    // ── Second pass: parse ONLY the chosen sheet's cell data ──────────────────────────
-    // `sheets: [name]` tells the parser to skip every other tab entirely — for the 76-tab
-    // file above, this is the difference between loading ~450,000 rows across every date and
-    // loading just the ~5,700 rows in the one sheet actually being imported.
-    const wb = XLSX.read(buf, { type: 'buffer', raw: true, sheets: [chosenSheetName] });
-    const ws = wb.Sheets[chosenSheetName];
     const rawData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
     if (!rawData.length) {
       parentPort!.postMessage({ success: true, headers: [], rows: [] });
