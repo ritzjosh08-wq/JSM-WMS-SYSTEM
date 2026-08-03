@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Package, Weight, Layers, Search, RefreshCw, ArrowDownToLine,
   ArrowUpFromLine, MapPin, Edit3, Check, X, ChevronUp, ChevronDown, Trash2,
-  History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck, Copy, PackageX
+  History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck, Copy, PackageX,
+  Grid3X3
 } from "lucide-react";
 import { useAuthStore, whQuery } from "../store/authStore";
 
@@ -1041,6 +1042,24 @@ export default function InventoryClient() {
     });
   }, []);
 
+  // Bin-wise / Rack-wise Allocation section — which location/rack groups are expanded.
+  const [expandedLocs, setExpandedLocs] = useState<Set<string>>(new Set());
+  const [expandedRacks, setExpandedRacks] = useState<Set<string>>(new Set());
+  const toggleLoc = useCallback((loc: string) => {
+    setExpandedLocs(prev => {
+      const next = new Set(prev);
+      next.has(loc) ? next.delete(loc) : next.add(loc);
+      return next;
+    });
+  }, []);
+  const toggleRack = useCallback((rack: string) => {
+    setExpandedRacks(prev => {
+      const next = new Set(prev);
+      next.has(rack) ? next.delete(rack) : next.add(rack);
+      return next;
+    });
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -1259,6 +1278,64 @@ export default function InventoryClient() {
     });
     return Array.from(map.entries()).sort((a, b) => b[1].pallets - a[1].pallets);
   }, [rmItems]);
+
+  // ── Bin-wise Material Allocation: Stock Location -> Bin -> items ──────────
+  // Grouped off activeItems (all live stock), independent of the table's own view/search
+  // filters — same pattern as rmByType above.
+  const stockBinAllocation = useMemo(() => {
+    const locMap = new Map<string, Map<string, EnrichedItem[]>>();
+    activeItems.forEach(item => {
+      const loc = item.stockLocation && item.stockLocation !== "—" ? item.stockLocation : "Unassigned";
+      const bin = item.binLocation && item.binLocation !== "—" ? item.binLocation : "No Bin";
+      if (!locMap.has(loc)) locMap.set(loc, new Map());
+      const binMap = locMap.get(loc)!;
+      if (!binMap.has(bin)) binMap.set(bin, []);
+      binMap.get(bin)!.push(item);
+    });
+    const result: { loc: string; bins: { bin: string; pallets: number; kg: number; items: EnrichedItem[] }[]; totalPallets: number; totalKg: number; totalItems: number }[] = [];
+    locMap.forEach((binMap, loc) => {
+      const bins: { bin: string; pallets: number; kg: number; items: EnrichedItem[] }[] = [];
+      let totalPallets = 0, totalKg = 0, totalItems = 0;
+      binMap.forEach((items, bin) => {
+        const pallets = items.reduce((s, i) => s + i.displayQtyPallet, 0);
+        const kg = items.reduce((s, i) => s + i.displayQtyKg, 0);
+        bins.push({ bin, pallets, kg, items });
+        totalPallets += pallets; totalKg += kg; totalItems += items.length;
+      });
+      bins.sort((a, b) => a.bin.localeCompare(b.bin));
+      result.push({ loc, bins, totalPallets, totalKg, totalItems });
+    });
+    return result.sort((a, b) => a.loc.localeCompare(b.loc));
+  }, [activeItems]);
+
+  // ── Rack-wise Allocation: Rack -> Row -> items ─────────────────────────────
+  // Only batches actually linked to a real provisioned Rack Bin (storageKind === "RACK").
+  const rackAllocation = useMemo(() => {
+    const rackMap = new Map<string, Map<string, EnrichedItem[]>>();
+    activeItems.forEach(item => {
+      if (item.storageKind !== "RACK" || !item.rackCode) return;
+      const rack = item.rackCode;
+      const row = item.rackRowCode || "—";
+      if (!rackMap.has(rack)) rackMap.set(rack, new Map());
+      const rowMap = rackMap.get(rack)!;
+      if (!rowMap.has(row)) rowMap.set(row, []);
+      rowMap.get(row)!.push(item);
+    });
+    const result: { rack: string; rows: { row: string; pallets: number; kg: number; items: EnrichedItem[] }[]; totalPallets: number; totalKg: number; totalItems: number }[] = [];
+    rackMap.forEach((rowMap, rack) => {
+      const rows: { row: string; pallets: number; kg: number; items: EnrichedItem[] }[] = [];
+      let totalPallets = 0, totalKg = 0, totalItems = 0;
+      rowMap.forEach((items, row) => {
+        const pallets = items.reduce((s, i) => s + i.displayQtyPallet, 0);
+        const kg = items.reduce((s, i) => s + i.displayQtyKg, 0);
+        rows.push({ row, pallets, kg, items });
+        totalPallets += pallets; totalKg += kg; totalItems += items.length;
+      });
+      rows.sort((a, b) => a.row.localeCompare(b.row));
+      result.push({ rack, rows, totalPallets, totalKg, totalItems });
+    });
+    return result.sort((a, b) => a.rack.localeCompare(b.rack));
+  }, [activeItems]);
 
   // Filter + sort
   const filtered = useMemo(() => {
