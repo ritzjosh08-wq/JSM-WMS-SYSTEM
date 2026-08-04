@@ -1,10 +1,43 @@
 # Getting the WMS onto a worker's laptop (no Netlify)
 
-> **Update:** the backend is now being deployed to Render (see `backend/DEPLOYMENT.md`) so it
-> runs 24/7 without depending on your laptop. Once that's live, you can skip the ngrok/tunnel
-> steps below entirely — just point `frontend/.env.worker` at your Render URL instead, and
-> stop running `start-tunnel-ngrok.bat`. Everything else here (the Cloudflare Pages link,
-> `build-worker-app.bat`) still applies the same way.
+> **Current setup (as of this deploy):** the backend is live 24/7 on Render at
+> `https://jsm-logistics-backend.onrender.com` — it does NOT depend on your laptop being on
+> anymore. The worker's app is live at `https://jsm-wms-system.pages.dev`. This means
+> **everything below about ngrok, tunnels, `start-app.bat`, and `start-tunnel-ngrok.bat` no
+> longer applies** — skip straight to "Deploying to the worker's laptop now" just below.
+> The rest of this file is kept only as a reference for the old laptop-hosted-backend setup.
+
+## Deploying to the worker's laptop now (current setup)
+
+There is nothing to install on the worker's laptop. The whole app — backend and frontend —
+already runs in the cloud, 24/7, independent of any laptop being on.
+
+1. **Give the worker this link**: `https://jsm-wms-system.pages.dev`
+   Any browser, any device (laptop, phone, tablet) — nothing to install.
+2. **Give them a login.** Right now the confirmed-working worker account is:
+   - Username: `chennaippd`
+   - Password: `Chennai@PPD2026`
+   If you want a separate account per worker (recommended before wider rollout), log in as
+   `chennaippd` (or an admin account) → **Settings → Workers** → create a new account with a
+   username/password you choose.
+3. **Optional — install it like an app.** On the login screen (or via the browser's address
+   bar install icon in Chrome/Edge), the worker can "Install app" so it gets a home-screen
+   icon and opens full-screen like a native app, instead of a browser tab. Still requires
+   login, still needs internet — it's just a shortcut, not an offline app.
+
+That's it. No Node.js, no batch files, no tunnel, no ngrok. If the app breaks or shows
+stale data for the worker, the fix is almost always on your end: either the Render
+backend needs redeploying (see `backend/DEPLOYMENT.md`) or the Cloudflare Pages site needs
+a fresh build — never anything the worker needs to touch on their own laptop.
+
+**Updating the app for the worker later:** since Cloudflare Pages is connected to GitHub
+with auto-deploy, any `git push` to `main` rebuilds and redeploys `jsm-wms-system.pages.dev`
+automatically within a minute or two — the worker's link never changes, they just see the
+new version next time they load/refresh the page.
+
+---
+
+## (Old reference only — laptop-hosted backend, no longer in use)
 
 ## What this actually does
 
