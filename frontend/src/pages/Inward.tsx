@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Plus, Upload, CheckCircle2, AlertCircle, Database, RefreshCw,
   Trash2, ClipboardList, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
@@ -1018,6 +1019,8 @@ export default function InwardClient() {
   const user = useAuthStore(s => s.user);
   const selectedWorker = useAuthStore(s => s.selectedWorker);
   const isViewer = user?.role === 'CUSTOMER';
+  const location = useLocation();
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<ManualEntry[]>([]);
   const [formOpen, setFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ManualEntry | null>(null);
@@ -1058,6 +1061,32 @@ export default function InwardClient() {
         setRackBinCodes(codes);
       })
       .catch(() => {});
+  }, []);
+
+  // ── Re-Inward prefill ────────────────────────────────────────────────────
+  // Arriving here from Inventory's "Re-Inward" action on a discrepancy row — pre-fills a
+  // fresh manual entry with the same invoice number + material so the worker can enter the
+  // real short/excess pallet count as a proper new inward transaction, instead of editing
+  // the original discrepant record in place. Clears the navigation state right after so
+  // refreshing (or navigating away and back) doesn't reopen the same prefilled form again.
+  useEffect(() => {
+    const prefill = (location.state as any)?.reinward;
+    if (!prefill) return;
+    setEditingEntry({
+      ...EMPTY_ENTRY,
+      id: "",
+      invoiceNumber: prefill.invoiceNumber || "",
+      materialCode: prefill.materialCode || "",
+      description: prefill.description || "",
+      materialType: prefill.materialType || "",
+      category: prefill.category || "RM",
+      stockLocation: prefill.stockLocation || "",
+    });
+    setFormOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+    // Intentionally run once on mount only — this is meant to fire exactly once for the
+    // navigation that carried the prefill data in, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Staging area ask helper — shows modal, returns promise ──────────────

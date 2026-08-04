@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Package, Weight, Layers, Search, RefreshCw, ArrowDownToLine,
   ArrowUpFromLine, MapPin, Edit3, Check, X, ChevronUp, ChevronDown, Trash2,
-  History, ArrowRight, AlertTriangle, CheckCircle2, ClipboardCheck, Copy, PackageX,
-  Grid3X3
+  History, ArrowRight, AlertTriangle, Copy, PackageX,
+  Grid3X3, ArrowUpRight
 } from "lucide-react";
 import { useAuthStore, whQuery } from "../store/authStore";
 
@@ -484,352 +485,6 @@ function EditDetailModal({
   );
 }
 
-// ── Rectify Discrepancy Modal ─────────────────────────────────────────────
-function RectifyDiscrepancyModal({
-  item, onSaved, onClose, onEditFull,
-}: {
-  item: EnrichedItem;
-  onSaved: () => void;
-  onClose: () => void;
-  onEditFull: () => void;
-}) {
-  // Pre-fill with invoice quantities — rectification means aligning received to invoice
-  const [form, setForm] = useState({
-    correctedQty:         item.invoiceQtyInNos    || item.quantity,
-    correctedPallets:     item.invoiceQtyInPallet  || item.displayQtyPallet,
-    correctedKg:          item.invoiceNetWeight    || item.displayQtyKg,
-    rectificationRemarks: "",
-  });
-  const [saving, setSaving] = useState(false);
-  const [error,  setError]  = useState<string | null>(null);
-  const set = (k: keyof typeof form) => (v: any) =>
-    setForm(f => ({ ...f, [k]: v }));
-
-  const submit = async () => {
-    if (!form.rectificationRemarks.trim()) {
-      setError("Rectification remarks are required."); return;
-    }
-    setSaving(true); setError(null);
-    try {
-      const history: any[] = Array.isArray(item.cf.rectificationHistory)
-        ? item.cf.rectificationHistory : [];
-      const newCf = {
-        ...item.cf,
-        // Clear all discrepancy flags
-        shortInPallet:    0,
-        shortExcessInKg:  0,
-        shortExcessInQty: 0,
-        discrepancyRemarks: "",
-        discrepancy: false,
-        // Align received quantities to match invoice quantities (reconciliation)
-        receivedQtyInNos:    form.correctedQty,
-        receivedQtyInPallets: form.correctedPallets,
-        receivedNetWeight:   form.correctedKg,
-        // Also update the working quantities used for stock display
-        pallets:   form.correctedPallets,
-        netWeight: form.correctedKg,
-        nos:       form.correctedQty,
-        // Append rectification record
-        rectificationHistory: [
-          ...history,
-          {
-            rectifiedAt:        new Date().toISOString(),
-            remarks:            form.rectificationRemarks,
-            prevShortPallet:    item.shortInPallet,
-            prevShortKg:        item.shortExcessInKg,
-            prevShortQty:       item.shortExcessInQty,
-            prevRemarks:        item.discrepancyRemarks,
-            prevReceivedQty:    item.receivedQtyInNos,
-            prevReceivedPallet: item.receivedQtyInPallets,
-            prevReceivedKg:     item.receivedNetWeight,
-            invoiceQty:         item.invoiceQtyInNos,
-            invoicePallet:      item.invoiceQtyInPallet,
-            invoiceKg:          item.invoiceNetWeight,
-            correctedQty:       form.correctedQty,
-            correctedPallets:   form.correctedPallets,
-            correctedKg:        form.correctedKg,
-          },
-        ],
-      };
-      const res = await fetch(`${API}/inventory/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          quantity:     form.correctedQty,
-          stockStatus:  "GOOD",
-          customFields: newCf,
-        }),
-      });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Failed to rectify"); }
-      onSaved(); onClose();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const shortPallet = item.shortInPallet;
-  const shortKg     = item.shortExcessInKg;
-  const shortQty    = item.shortExcessInQty;
-  const rectHistory: any[] = Array.isArray(item.cf.rectificationHistory)
-    ? item.cf.rectificationHistory : [];
-
-  const diffLabel = (v: number, unit: string) => {
-    if (v === 0) return null;
-    const sign = v > 0 ? "+" : "";
-    const color = v < 0 ? "#b91c1c" : "#b45309";
-    return <span style={{ fontWeight: 700, color }}>{sign}{v} {unit}</span>;
-  };
-
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, zIndex: 110, background: "rgba(0,0,0,0.52)",
-               display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
-      onClick={e => e.target === e.currentTarget && onClose()}
-    >
-      <div style={{ background: "#fff", borderRadius: "16px", width: "100%", maxWidth: "700px",
-                    maxHeight: "92vh", overflowY: "auto",
-                    boxShadow: "0 24px 60px rgba(185,28,28,0.18)" }}>
-
-        {/* ── Header ── */}
-        <div style={{ background: "linear-gradient(135deg,#fef2f2 0%,#fff5f5 100%)",
-                      borderBottom: "1.5px solid #fecaca", padding: "18px 24px 14px",
-                      borderRadius: "16px 16px 0 0", position: "sticky", top: 0, zIndex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px",
-                            fontWeight: 900, fontSize: "14px", color: "#b91c1c" }}>
-                <AlertTriangle size={16} /> Rectify Discrepancy
-              </div>
-              <div style={{ fontSize: "11px", color: "#64748b", marginTop: "3px" }}>
-                <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#1e40af" }}>
-                  {item.material?.code || "—"}
-                </span>
-                {" · "}{item.material?.description || "—"}
-                {item.invoiceNo !== "—" && <>{" · "}Invoice: <strong>{item.invoiceNo}</strong></>}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={onEditFull}
-                style={{ padding: "6px 12px", background: "#fff", border: "1.5px solid #e2e8f0",
-                         borderRadius: "8px", fontSize: "11px", fontWeight: 700,
-                         color: "#64748b", cursor: "pointer" }}>
-                Edit Full Details
-              </button>
-              <button onClick={onClose}
-                style={{ background: "#fff", border: "1.5px solid #fca5a5", borderRadius: "8px",
-                         padding: "6px", cursor: "pointer", color: "#b91c1c",
-                         display: "flex", alignItems: "center" }}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "20px" }}>
-
-          {/* ── Discrepancy Summary ── */}
-          <div style={{ background: "#fef2f2", border: "1.5px solid #fca5a5",
-                        borderRadius: "12px", padding: "16px 18px" }}>
-            <div style={{ fontSize: "10px", fontWeight: 800, color: "#dc2626",
-                          textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "12px",
-                          display: "flex", alignItems: "center", gap: "6px" }}>
-              <AlertTriangle size={11} /> Recorded Discrepancy
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "10px" }}>
-              {/* Pallets */}
-              <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: "8px", padding: "10px 12px" }}>
-                <div style={{ fontSize: "9px", fontWeight: 700, color: "#94a3b8",
-                              textTransform: "uppercase", marginBottom: "6px" }}>Pallets</div>
-                <div style={{ fontSize: "11px", color: "#64748b", marginBottom: "3px" }}>
-                  Invoice: <strong>{item.invoiceQtyInPallet || "—"}</strong>
-                  {" | "}Received: <strong>{item.receivedQtyInPallets || "—"}</strong>
-                </div>
-                <div>{diffLabel(shortPallet, "pallet(s)") ?? <span style={{ fontSize: "11px", color: "#94a3b8" }}>No difference</span>}</div>
-              </div>
-              {/* Net Weight */}
-              <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: "8px", padding: "10px 12px" }}>
-                <div style={{ fontSize: "9px", fontWeight: 700, color: "#94a3b8",
-                              textTransform: "uppercase", marginBottom: "6px" }}>Net Weight</div>
-                <div style={{ fontSize: "11px", color: "#64748b", marginBottom: "3px" }}>
-                  Invoice: <strong>{item.invoiceNetWeight ? `${item.invoiceNetWeight} kg` : "—"}</strong>
-                  {" | "}Received: <strong>{item.receivedNetWeight ? `${item.receivedNetWeight} kg` : "—"}</strong>
-                </div>
-                <div>{diffLabel(shortKg, "kg") ?? <span style={{ fontSize: "11px", color: "#94a3b8" }}>No difference</span>}</div>
-              </div>
-              {/* Qty Nos */}
-              <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: "8px", padding: "10px 12px" }}>
-                <div style={{ fontSize: "9px", fontWeight: 700, color: "#94a3b8",
-                              textTransform: "uppercase", marginBottom: "6px" }}>Qty (Nos)</div>
-                <div style={{ fontSize: "11px", color: "#64748b", marginBottom: "3px" }}>
-                  Invoice: <strong>{item.invoiceQtyInNos || "—"}</strong>
-                  {" | "}Received: <strong>{item.receivedQtyInNos || "—"}</strong>
-                </div>
-                <div>{diffLabel(shortQty, "nos") ?? <span style={{ fontSize: "11px", color: "#94a3b8" }}>No difference</span>}</div>
-              </div>
-            </div>
-            {item.discrepancyRemarks && (
-              <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: "8px",
-                            padding: "8px 12px", fontSize: "12px", color: "#7f1d1d" }}>
-                <strong>Discrepancy Note: </strong>{item.discrepancyRemarks}
-              </div>
-            )}
-          </div>
-
-          {/* ── Corrected Quantities ── */}
-          <div>
-            <div style={{ fontSize: "10px", fontWeight: 800, color: "#059669",
-                          textTransform: "uppercase", letterSpacing: "0.1em",
-                          marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
-              <CheckCircle2 size={12} /> Reconcile Received → Invoice
-            </div>
-            <div style={{ fontSize: "11px", color: "#64748b", marginBottom: "12px", lineHeight: "1.6" }}>
-              A discrepancy is resolved when <strong>received quantities match invoice quantities</strong>.
-              The fields below are pre-filled with invoice values — adjust only if the verified figure differs.
-            </div>
-            {/* Invoice reference row */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "10px" }}>
-              {[
-                { label: "Invoice Qty (Nos)",    value: item.invoiceQtyInNos    || "—" },
-                { label: "Invoice Pallets",       value: item.invoiceQtyInPallet  || "—" },
-                { label: "Invoice Net Wt (kg)",  value: item.invoiceNetWeight    || "—" },
-              ].map(({ label, value }) => (
-                <div key={label} style={{ background: "#f0fdf4", border: "1.5px solid #86efac",
-                                          borderRadius: "8px", padding: "8px 12px" }}>
-                  <div style={{ fontSize: "9px", fontWeight: 700, color: "#16a34a",
-                                textTransform: "uppercase", marginBottom: "3px" }}>{label}</div>
-                  <div style={{ fontSize: "14px", fontWeight: 800, color: "#15803d" }}>{value}</div>
-                </div>
-              ))}
-            </div>
-            {/* Editable received-after-rectification row */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
-              <ModalInput label="Set Received Qty (Nos)" value={form.correctedQty} type="number"
-                onChange={set("correctedQty")} />
-              <ModalInput label="Set Received Pallets" value={form.correctedPallets} type="number"
-                onChange={set("correctedPallets")} />
-              <ModalInput label="Set Received Net Wt (kg)" value={form.correctedKg} type="number"
-                onChange={set("correctedKg")} />
-            </div>
-            {/* Live diff indicator */}
-            {(() => {
-              const qDiff = form.correctedQty    - (item.invoiceQtyInNos    || 0);
-              const pDiff = form.correctedPallets - (item.invoiceQtyInPallet  || 0);
-              const kDiff = form.correctedKg     - (item.invoiceNetWeight    || 0);
-              const allMatch = qDiff === 0 && pDiff === 0 && kDiff === 0;
-              return (
-                <div style={{ marginTop: "8px", padding: "8px 12px", borderRadius: "8px",
-                              background: allMatch ? "#f0fdf4" : "#fffbeb",
-                              border: `1px solid ${allMatch ? "#86efac" : "#fcd34d"}`,
-                              fontSize: "11px", fontWeight: 600,
-                              color: allMatch ? "#15803d" : "#b45309",
-                              display: "flex", alignItems: "center", gap: "6px" }}>
-                  {allMatch
-                    ? <><CheckCircle2 size={12} /> Received quantities will match invoice — discrepancy cleared.</>
-                    : <><AlertTriangle size={12} /> Remaining difference: {qDiff !== 0 && `${qDiff > 0 ? "+" : ""}${qDiff} nos `}{pDiff !== 0 && `${pDiff > 0 ? "+" : ""}${pDiff} pallet(s) `}{kDiff !== 0 && `${kDiff > 0 ? "+" : ""}${kDiff} kg`}. Discrepancy will be cleared regardless.</>}
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* ── Rectification Remarks ── */}
-          <div>
-            <div style={{ fontSize: "10px", fontWeight: 800, color: "#7c3aed",
-                          textTransform: "uppercase", letterSpacing: "0.1em",
-                          marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
-              <ClipboardCheck size={12} /> Rectification Remarks <span style={{ color: "#dc2626" }}>*</span>
-            </div>
-            <textarea
-              value={form.rectificationRemarks}
-              onChange={e => set("rectificationRemarks")(e.target.value)}
-              placeholder="Describe how the discrepancy was resolved — e.g. physical recount confirmed 480 Nos; 1 pallet missing due to transit damage, adjusted accordingly."
-              rows={3}
-              style={{ width: "100%", border: `1.5px solid ${form.rectificationRemarks.trim() ? "#ddd6fe" : "#e2e8f0"}`,
-                       borderRadius: "8px", padding: "9px 12px", fontSize: "12px", color: "#0f172a",
-                       background: "#faf5ff", outline: "none", boxSizing: "border-box",
-                       resize: "vertical", fontFamily: "inherit", lineHeight: "1.6" }}
-            />
-          </div>
-
-          {/* ── Previous Rectification History ── */}
-          {rectHistory.length > 0 && (
-            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0",
-                          borderRadius: "10px", padding: "12px 16px" }}>
-              <div style={{ fontSize: "10px", fontWeight: 800, color: "#7c3aed",
-                            textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px",
-                            display: "flex", alignItems: "center", gap: "6px" }}>
-                <History size={11} /> Previous Rectifications
-              </div>
-              {[...rectHistory].reverse().map((h: any, i: number) => (
-                <div key={i} style={{ padding: "8px 0",
-                                      borderBottom: i < rectHistory.length - 1 ? "1px solid #f1f5f9" : "none" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#059669",
-                                   display: "flex", alignItems: "center", gap: "4px" }}>
-                      <CheckCircle2 size={11} /> Rectified
-                    </span>
-                    <span style={{ fontSize: "10px", color: "#94a3b8" }}>
-                      {new Date(h.rectifiedAt).toLocaleString("en-IN", {
-                        day: "2-digit", month: "short", year: "numeric",
-                        hour: "2-digit", minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#374151", marginBottom: "4px" }}>
-                    {h.remarks}
-                  </div>
-                  <div style={{ fontSize: "10px", color: "#94a3b8" }}>
-                    Was: {h.prevShortPallet !== 0 && `${h.prevShortPallet > 0 ? "+" : ""}${h.prevShortPallet} pallet · `}
-                         {h.prevShortKg    !== 0 && `${h.prevShortKg > 0 ? "+" : ""}${h.prevShortKg} kg · `}
-                         {h.prevShortQty   !== 0 && `${h.prevShortQty > 0 ? "+" : ""}${h.prevShortQty} nos`}
-                    {" → "} Corrected to {h.correctedQty} nos / {h.correctedPallets} pallets / {h.correctedKg} kg
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {error && (
-            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "8px",
-                          padding: "10px 14px", color: "#dc2626", fontSize: "12px", fontWeight: 600 }}>
-              ⚠ {error}
-            </div>
-          )}
-        </div>
-
-        {/* ── Footer ── */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                      gap: "10px", padding: "14px 24px 18px", borderTop: "1px solid #f1f5f9",
-                      position: "sticky", bottom: 0, background: "#fff",
-                      borderRadius: "0 0 16px 16px" }}>
-          <div style={{ fontSize: "11px", color: "#64748b" }}>
-            Submitting sets status to <strong style={{ color: "#059669" }}>GOOD</strong> and
-            clears all discrepancy flags.
-          </div>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button onClick={onClose}
-              style={{ padding: "9px 20px", background: "#f8fafc", border: "1.5px solid #e2e8f0",
-                       borderRadius: "9px", fontSize: "12px", fontWeight: 700,
-                       color: "#64748b", cursor: "pointer" }}>
-              Cancel
-            </button>
-            <button onClick={submit} disabled={saving}
-              style={{ padding: "9px 24px", background: saving ? "#86efac" : "#16a34a",
-                       border: "none", borderRadius: "9px", fontSize: "12px", fontWeight: 800,
-                       color: "#fff", cursor: saving ? "not-allowed" : "pointer",
-                       display: "flex", alignItems: "center", gap: "6px" }}>
-              {saving
-                ? <><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Rectifying…</>
-                : <><CheckCircle2 size={13} /> Submit Rectification</>}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Mark Damaged Modal ───────────────────────────────────────────────────────
 // New feature: flag part (or all) of a batch's quantity as damaged. Backed by
 // POST /api/damage/:batchId/mark (routes/damage.ts) — writes a permanent DamageRecord
@@ -995,6 +650,7 @@ function MarkDamagedModal({
 
 // ── Main component ─────────────────────────────────────────────────────────
 export default function InventoryClient() {
+  const navigate = useNavigate();
   const user = useAuthStore(s => s.user);
   const selectedWorker = useAuthStore(s => s.selectedWorker);
   const isViewer = user?.role === 'CUSTOMER';
@@ -1014,12 +670,8 @@ export default function InventoryClient() {
   const [sortField, setSortField]   = useState<SortField>("receiptDate");
   const [sortDir, setSortDir]       = useState<SortDir>("desc");
   const [selectedItem, setSelectedItem] = useState<EnrichedItem | null>(null);
-  const [rectifyItem,  setRectifyItem]  = useState<EnrichedItem | null>(null);
   const [damageItem,   setDamageItem]   = useState<EnrichedItem | null>(null);
   const [deletingId, setDeletingId]     = useState<string | null>(null);
-  // Which item is mid one-click "Auto-Rectify" (see autoRectify below) — disables that
-  // item's button while the PATCH is in flight so a double-click can't double-submit.
-  const [autoRectifyingId, setAutoRectifyingId] = useState<string | null>(null);
   // Which HU Unit cell (or the bulk-copy button) was just clicked — drives the
   // brief "copied ✓" feedback state before it fades back to the copy icon.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -1115,56 +767,27 @@ export default function InventoryClient() {
     }
   }, [load]);
 
-  // ── Auto-Rectify: one-click discrepancy resolution ─────────────────────────
-  // The existing "Rectify Discrepancy" modal already pre-fills received qty to match
-  // invoice qty — resolving a discrepancy has always meant confirming those same
-  // pre-filled numbers plus typing a remarks note by hand. This does the identical PATCH
-  // (same payload the modal's Submit button sends) straight from the inventory row, with
-  // an auto-generated remarks note, so routine reconciliations don't need the modal's
-  // manual click-through at all. It's still a deliberate, per-item click (not silent/
-  // background) and it still writes a full rectificationHistory entry, so every
-  // auto-rectification remains fully audited and reversible via "Edit Full Details".
-  const autoRectify = useCallback(async (item: EnrichedItem, e: React.MouseEvent) => {
+  // ── Re-Inward a discrepancy ──────────────────────────────────────────────
+  // Discrepancies are never edited in place (no auto-rectify, no manual quantity
+  // overwrite) — the short/excess pallets get reconciled by the worker doing a fresh
+  // Inward entry under the SAME invoice number once the real pallets are counted/received.
+  // This just takes them to Inward Entry with the invoice number and material pre-filled
+  // so they don't have to retype it; the actual quantities are entered fresh, for real.
+  const reInward = useCallback((item: EnrichedItem, e: React.MouseEvent) => {
     e.stopPropagation();
-    setAutoRectifyingId(item.id);
-    try {
-      const correctedQty     = item.invoiceQtyInNos    || item.quantity;
-      const correctedPallets = item.invoiceQtyInPallet  || item.displayQtyPallet;
-      const correctedKg      = item.invoiceNetWeight    || item.displayQtyKg;
-      const history: any[] = Array.isArray(item.cf.rectificationHistory) ? item.cf.rectificationHistory : [];
-      const newCf = {
-        ...item.cf,
-        shortInPallet: 0, shortExcessInKg: 0, shortExcessInQty: 0,
-        discrepancyRemarks: "", discrepancy: false,
-        receivedQtyInNos: correctedQty, receivedQtyInPallets: correctedPallets, receivedNetWeight: correctedKg,
-        pallets: correctedPallets, netWeight: correctedKg, nos: correctedQty,
-        rectificationHistory: [
-          ...history,
-          {
-            rectifiedAt: new Date().toISOString(),
-            remarks: "Auto-rectified — received quantities reconciled to invoice values.",
-            autoRectified: true,
-            prevShortPallet: item.shortInPallet, prevShortKg: item.shortExcessInKg, prevShortQty: item.shortExcessInQty,
-            prevRemarks: item.discrepancyRemarks,
-            prevReceivedQty: item.receivedQtyInNos, prevReceivedPallet: item.receivedQtyInPallets, prevReceivedKg: item.receivedNetWeight,
-            invoiceQty: item.invoiceQtyInNos, invoicePallet: item.invoiceQtyInPallet, invoiceKg: item.invoiceNetWeight,
-            correctedQty, correctedPallets, correctedKg,
-          },
-        ],
-      };
-      const res = await fetch(`${API}/inventory/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ quantity: correctedQty, stockStatus: "GOOD", customFields: newCf }),
-      });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Failed to auto-rectify"); }
-      load();
-    } catch (e: any) {
-      alert(`Auto-rectify failed: ${e.message || "Unknown error"}`);
-    } finally {
-      setAutoRectifyingId(null);
-    }
-  }, [load]);
+    navigate('/inward', {
+      state: {
+        reinward: {
+          invoiceNumber: item.invoiceNo && item.invoiceNo !== '—' ? item.invoiceNo : '',
+          materialCode: item.material?.code || '',
+          description: item.material?.description || '',
+          materialType: item.materialType || '',
+          category: item.category || '',
+          stockLocation: item.stockLocation && item.stockLocation !== '—' ? item.stockLocation : '',
+        },
+      },
+    });
+  }, [navigate]);
 
   // Enrich items with parsed customFields
   const enriched: EnrichedItem[] = useMemo(() =>
@@ -1474,16 +1097,6 @@ export default function InventoryClient() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-
-      {/* Rectify Discrepancy modal */}
-      {rectifyItem && (
-        <RectifyDiscrepancyModal
-          item={rectifyItem}
-          onClose={() => setRectifyItem(null)}
-          onSaved={() => { setRectifyItem(null); load(); }}
-          onEditFull={() => { setSelectedItem(rectifyItem); setRectifyItem(null); }}
-        />
-      )}
 
       {/* Mark Damaged Goods modal */}
       {damageItem && (
@@ -2035,8 +1648,8 @@ export default function InventoryClient() {
                 return (
                   <tr
                     key={item.id}
-                    onClick={() => disc ? setRectifyItem(item) : setSelectedItem(item)}
-                    title={disc ? "Click to rectify discrepancy" : "Click to edit"}
+                    onClick={() => setSelectedItem(item)}
+                    title={disc ? "Discrepancy on this batch — click to view details" : "Click to edit"}
                     style={rowStyle}
                     onMouseEnter={e => ((e.currentTarget as HTMLTableRowElement).style.background = hoverBg)}
                     onMouseLeave={e => ((e.currentTarget as HTMLTableRowElement).style.background = baseRowBg)}
@@ -2050,23 +1663,20 @@ export default function InventoryClient() {
                           <span style={{ display: "inline-flex", alignItems: "center", gap: "3px",
                                          fontSize: "9px", fontWeight: 800, color: "#b91c1c",
                                          background: "#fef2f2", border: "1px solid #fca5a5",
-                                         padding: "2px 6px", borderRadius: "4px", cursor: "pointer" }}>
-                            <AlertTriangle size={9} /> Rectify
+                                         padding: "2px 6px", borderRadius: "4px" }}>
+                            <AlertTriangle size={9} /> Discrepancy
                           </span>
                         )}
                         {disc && (
                           <button
-                            onClick={e => autoRectify(item, e)}
-                            disabled={autoRectifyingId === item.id}
-                            title="One-click: set received = invoice qty and clear this discrepancy (skips the manual modal)"
+                            onClick={e => reInward(item, e)}
+                            title="Go to Inward Entry with this invoice number and material pre-filled — enter the actual short/excess pallets as a fresh inward"
                             style={{ display: "inline-flex", alignItems: "center", gap: "3px",
                                      fontSize: "9px", fontWeight: 800, color: "#fff",
-                                     background: autoRectifyingId === item.id ? "#86efac" : "#16a34a",
+                                     background: "#2563eb",
                                      border: "none", padding: "3px 6px", borderRadius: "4px",
-                                     cursor: autoRectifyingId === item.id ? "not-allowed" : "pointer" }}>
-                            {autoRectifyingId === item.id
-                              ? <RefreshCw size={9} style={{ animation: "spin 1s linear infinite" }} />
-                              : <CheckCircle2 size={9} />} Auto-Rectify
+                                     cursor: "pointer" }}>
+                            <ArrowUpRight size={9} /> Re-Inward
                           </button>
                         )}
                       </div>
