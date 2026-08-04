@@ -131,7 +131,7 @@ function saveDynamicUsers(users: UserRecord[]) {
 // the note in middleware/auth.ts for a one-liner pattern) and swap it in here, or better,
 // use the Settings > Workers admin UI (POST /auth/users) which stores hashes the same way
 // but outside of source control entirely (dynamic-users.json, gitignored).
-const HASH_ADMIN       = '$2b$10$OhXjHeLWw6IpbQik2E0upuVJbVNdRp6j5VY6/oD4Vg6BSDGbMetjy';
+const HASH_ADMIN       = '$2a$10$eP.0YGBlJKLzMD28HsJM1emfa0GOSROKBE19sVGgXBQVMfxKAb4TO'; // reset 2026-08-04 — new password: JSM@Admin2026
 const HASH_CHENNAIPPD  = '$2a$10$Rh4VdN0axnCYeN4q6iQniOUgtE/sFtIuhLzp910r.ROS1.x5AmUiK'; // reset 2026-07-30 — new password: Chennai@PPD2026
 const HASH_CHENNAIFG05 = '$2b$10$u2zPFgNzm8SZWl5P.N3E1utX76AAJCK2aDtGkQrDr8cH/34jJG0AC';
 const HASH_CHENNAICUST = '$2b$10$4yNau6NpujixD1J6CmMdHeIWOziync34aMZCqXQ7rssaNymStqmDi';
