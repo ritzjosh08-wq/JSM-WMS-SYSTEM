@@ -193,13 +193,20 @@ function run() {
     return;
   }
   try {
-    const { fileBase64, fileName } = workerData as { fileBase64: string; fileName: string };
-    if (!fileBase64) {
-      parentPort!.postMessage({ success: false, error: 'fileBase64 is required' });
+    // Accepts either the raw file buffer (current — comes straight from a multipart upload,
+    // no encoding step involved) or a base64 string (legacy fallback, kept in case anything
+    // else still calls this worker the old way).
+    const data = workerData as { fileBuffer?: Buffer; fileBase64?: string; fileName: string };
+    const { fileName } = data;
+    const buf: Buffer | null = data.fileBuffer
+      ? Buffer.from(data.fileBuffer)
+      : data.fileBase64
+      ? Buffer.from(data.fileBase64, 'base64')
+      : null;
+    if (!buf) {
+      parentPort!.postMessage({ success: false, error: 'fileBuffer or fileBase64 is required' });
       return;
     }
-
-    const buf = Buffer.from(fileBase64, 'base64');
 
     // ── Sheet selection + extraction ───────────────────────────────────────────────────
     // Some real warehouse workbooks (e.g. daily "godown sheet" exports) keep one sheet PER

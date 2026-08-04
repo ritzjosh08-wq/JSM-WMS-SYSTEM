@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import multer from 'multer';
 import { Worker } from 'worker_threads';
 import { prisma } from '../lib/prisma';
 import { resolveScopedCodes, requireRole } from '../middleware/auth';
@@ -10,8 +11,18 @@ try { XLSX = require('xlsx'); } catch { /* xlsx not installed yet */ }
 
 const router = express.Router();
 
-// ── POST /parse-excel — accepts base64-encoded Excel file, returns parsed row data
-// Frontend sends: { fileBase64: string, fileName: string }
+// Raw multipart upload (not base64-in-JSON — see comment on the route below for why).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+// ── POST /parse-excel — accepts the raw Excel file as multipart/form-data, returns parsed
+// row data. Frontend sends a FormData with the file under the field name "file".
+//
+// This used to accept the file as a base64 string inside a JSON body instead. Base64 adds
+// ~33% to the payload size (a 47.6MB file became a ~63MB JSON body) and required the browser
+// to first read + base64-encode the whole file on the main thread before the upload could
+// even start — real, measurable time on a large "godown sheet" export, especially over a
+// slow/typical upload connection. A raw multipart upload sends the file's actual bytes with
+// no encoding overhead and no client-side pre-processing step at all.
 //
 // The actual parsing (see workers/excelParseWorker.ts, which is an exact copy of the
 // logic that used to run right here) happens in a separate worker thread with a capped
@@ -22,12 +33,14 @@ const router = express.Router();
 // Capping the worker's own heap means an oversized file fails ONLY this one request
 // (a clean error below) while the main server keeps running normally for everyone else.
 // Output shape and parsing behavior are byte-for-byte identical to before.
-router.post('/parse-excel', express.json({ limit: '100mb' }), (req, res) => {
+router.post('/parse-excel', upload.single('file'), (req, res) => {
   if (!XLSX) {
     return res.status(500).json({ error: 'xlsx package not installed on backend. Run: npm install xlsx in the backend folder.' });
   }
-  const { fileBase64, fileName } = req.body;
-  if (!fileBase64) return res.status(400).json({ error: 'fileBase64 is required' });
+  const file = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
+  if (!file) return res.status(400).json({ error: 'file is required (multipart form field "file")' });
+  const fileBuffer = file.buffer;
+  const fileName = file.originalname;
 
   // worker_threads' Worker always loads its entry as a plain file via Node's own module
   // loader — it does NOT go through ts-node's require-hook the way the main process does.
@@ -46,7 +59,10 @@ router.post('/parse-excel', express.json({ limit: '100mb' }), (req, res) => {
     : path.join(__dirname, '../workers/excelParseWorker.js');
 
   const worker = new Worker(workerPath, {
-    workerData: { fileBase64, fileName },
+    // Buffers pass through worker_threads' structured clone natively — no base64 step
+    // needed on this hop either (that used to be a second unnecessary encode/decode, on
+    // top of the one this route used to require from the browser).
+    workerData: { fileBuffer, fileName },
     // transpile-only (not plain 'ts-node/register'): a fresh worker-thread process
     // doesn't inherit the main process's already-resolved tsconfig/@types context, and
     // full type-checking there fails with spurious "Cannot find name 'Buffer'/'require'"

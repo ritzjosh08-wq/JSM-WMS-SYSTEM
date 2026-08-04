@@ -1222,25 +1222,18 @@ export default function InwardClient() {
     if (!file) return;
     setSmartUploading(true); setSmartError(null); setSmartImported(0); setSmartBlankSkipped(0); setSmartTotalRows(0);
     try {
-      // Send file to backend for Excel parsing (avoids timezone/date issues in frontend JS).
-      // Base64-encode via FileReader.readAsDataURL rather than a manual byte-by-byte loop +
-      // btoa(): the old loop built up one giant JS string by repeated concatenation (tens of
-      // millions of characters for a ~50MB warehouse export) entirely on the main thread,
-      // freezing the whole tab for several seconds on every large upload — a real contributor
-      // to "the app is lagging," not just the entries list below. readAsDataURL does the same
-      // encoding using the browser's native (non-blocking, far faster) implementation; the
-      // result just needs the "data:...;base64," prefix stripped off. Output is byte-for-byte
-      // the same base64 string as before.
-      const base64: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(',')[1] || '');
-        reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
-        reader.readAsDataURL(file);
-      });
+      // Send the raw file straight to the backend as multipart/form-data — no base64
+      // encoding step at all. The old approach (FileReader.readAsDataURL -> base64 -> JSON
+      // body) added ~33% to the upload size (a 47.6MB file became a ~63MB request body) and
+      // still required reading + re-encoding the whole file before the upload could even
+      // start. A raw multipart upload sends the file's actual bytes with no client-side
+      // pre-processing and no size overhead — directly cuts upload time, especially over a
+      // slower connection or for a large "godown sheet" export.
+      const formData = new FormData();
+      formData.append('file', file, file.name);
       const parseRes = await fetch(`${API}/inward/parse-excel`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileBase64: base64, fileName: file.name }),
+        body: formData,
       });
       if (!parseRes.ok) {
         const err = await parseRes.json();
