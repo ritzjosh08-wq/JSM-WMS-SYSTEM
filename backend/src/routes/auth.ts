@@ -134,7 +134,7 @@ function saveDynamicUsers(users: UserRecord[]) {
 const HASH_ADMIN       = '$2a$10$eP.0YGBlJKLzMD28HsJM1emfa0GOSROKBE19sVGgXBQVMfxKAb4TO'; // reset 2026-08-04 — new password: JSM@Admin2026
 const HASH_CHENNAIPPD  = '$2a$10$Rh4VdN0axnCYeN4q6iQniOUgtE/sFtIuhLzp910r.ROS1.x5AmUiK'; // reset 2026-07-30 — new password: Chennai@PPD2026
 const HASH_CHENNAIFG05 = '$2b$10$u2zPFgNzm8SZWl5P.N3E1utX76AAJCK2aDtGkQrDr8cH/34jJG0AC';
-const HASH_CHENNAICUST = '$2b$10$4yNau6NpujixD1J6CmMdHeIWOziync34aMZCqXQ7rssaNymStqmDi';
+const HASH_CHENNAICUST = '$2a$10$P2kthNfOkc0AILs7QWaz4uO7dg8HaMPpH/KPtOek1Fu/Mg7yP0NPq'; // reset 2026-08-05 — new password: Chennai@Cust2026 (old hash had no known plaintext)
 const BASE_USERS: UserRecord[] = [
   { username: 'admin',       password: HASH_ADMIN,       name: 'Admin',              role: 'ADMIN',    location: 'All Warehouses' },
   // chennaippd is a common/shared worker who handles both warehouses, not just CM35 —
