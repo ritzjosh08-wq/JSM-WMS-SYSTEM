@@ -159,8 +159,10 @@ const corsOrigins = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()
 // dashboard — allowing the whole suffix means that link works immediately without this
 // file needing to be edited (and the backend restarted) every time a new Pages project or
 // preview URL is created. This is additive only: every origin in CORS_ORIGIN above is
-// still allowed exactly as before.
-const ALLOWED_ORIGIN_SUFFIXES = ['.pages.dev'];
+// still allowed exactly as before. *.netlify.app is here for the same reason — the
+// customer-app (customer-app/) is deployed on Netlify (jsm-logistics-portal.netlify.app),
+// and Netlify's own preview-deploy URLs are also unpredictable subdomains.
+const ALLOWED_ORIGIN_SUFFIXES = ['.pages.dev', '.netlify.app'];
 app.use(cors((corsOrigins.length || ALLOWED_ORIGIN_SUFFIXES.length) ? {
   origin(origin, callback) {
     if (!origin) return callback(null, true); // non-browser callers (curl, health checks) send no Origin header

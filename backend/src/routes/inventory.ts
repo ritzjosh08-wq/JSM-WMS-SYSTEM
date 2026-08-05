@@ -364,6 +364,27 @@ router.delete('/reset-all', requireRole('ADMIN'), async (req, res) => {
   }
 });
 
+// ── DELETE /reset-transactions must also come BEFORE /:id for the same routing reason as
+// reset-all above. ADMIN-only: clears every Inward entry, Outward dispatch, and the current
+// InventoryBatch stock they produced — i.e. "start the transaction history over" — while
+// deliberately leaving Materials, Warehouses/Racks/Bins/Floor locations, and User accounts
+// untouched. This is the narrower sibling of /reset-all (which also wipes the material
+// catalog and every other operational table); use this one when the goal is just to clear
+// out inward/outward test data before real use, not reset the whole warehouse setup.
+router.delete('/reset-transactions', requireRole('ADMIN'), async (req, res) => {
+  try {
+    // Children before parents, same ordering rule as reset-all.
+    await prisma.inwardLineItem.deleteMany({});
+    await prisma.inwardEntry.deleteMany({});
+    await prisma.outwardLineItem.deleteMany({});
+    await prisma.outwardEntry.deleteMany({});
+    await prisma.inventoryBatch.deleteMany({});
+    res.json({ success: true, message: 'Inward entries, outward dispatches, and current inventory stock cleared. Materials, warehouses, and user accounts were left untouched.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.delete('/:id', requireBatchWriteAccess, async (req, res) => {
   try {
     const id: string = String(req.params.id);

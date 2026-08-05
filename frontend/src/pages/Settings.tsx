@@ -45,6 +45,11 @@ export default function Settings() {
   const [wipeResult, setWipeResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [deletingUser, setDeletingUser] = useState<string | null>(null);
 
+  // Narrower reset — inward/outward transactions + current stock only, keeps everything else
+  const [txnWipeConfirmText, setTxnWipeConfirmText] = useState('');
+  const [txnWiping, setTxnWiping] = useState(false);
+  const [txnWipeResult, setTxnWipeResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   const load = async () => {
     setLoading(true); setError(null);
     try {
@@ -401,6 +406,83 @@ export default function Settings() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* ── Reset Transactions Only (keeps materials, warehouses, users) */}
+      <div style={{ background: '#fff', borderRadius: '16px', border: '2px solid #fed7aa', padding: '28px', marginTop: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+          <div style={{ background: '#fff7ed', borderRadius: '10px', padding: '8px', display: 'flex' }}>
+            <Database size={18} color="#c2410c" />
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '15px', color: '#9a3412' }}>Reset Transactions Only</div>
+            <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '2px' }}>
+              Clears every Inward entry, Outward dispatch, and the current inventory stock they
+              produced — a clean slate for testing the workflow. <strong>Materials, warehouses,
+              rack/bin locations, and user accounts are kept exactly as they are.</strong> This
+              cannot be undone.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ background: '#fff7ed', borderRadius: '10px', padding: '16px', marginTop: '16px', border: '1px solid #fed7aa' }}>
+          <div style={{ fontSize: '13px', color: '#7c2d12', fontWeight: 600, marginBottom: '10px' }}>
+            Type <code style={{ background: '#ffedd5', padding: '1px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>RESET TRANSACTIONS</code> to confirm:
+          </div>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <input
+              type="text"
+              value={txnWipeConfirmText}
+              onChange={e => { setTxnWipeConfirmText(e.target.value); setTxnWipeResult(null); }}
+              placeholder="RESET TRANSACTIONS"
+              style={{
+                flex: 1, padding: '10px 14px', borderRadius: '8px',
+                border: '1.5px solid #fdba74', fontSize: '13px', fontFamily: 'monospace',
+                outline: 'none', background: '#fff',
+              }}
+            />
+            <button
+              disabled={txnWipeConfirmText !== 'RESET TRANSACTIONS' || txnWiping}
+              onClick={async () => {
+                if (txnWipeConfirmText !== 'RESET TRANSACTIONS') return;
+                setTxnWiping(true);
+                setTxnWipeResult(null);
+                try {
+                  const res = await fetch(`${API}/inventory/reset-transactions`, { method: 'DELETE' });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json.error || 'Reset failed');
+                  setTxnWipeResult({ ok: true, msg: json.message || 'Inward, outward, and current stock cleared.' });
+                  setTxnWipeConfirmText('');
+                } catch (err: any) {
+                  setTxnWipeResult({ ok: false, msg: err.message });
+                } finally {
+                  setTxnWiping(false);
+                }
+              }}
+              style={{
+                padding: '10px 20px', borderRadius: '8px', fontWeight: 700, fontSize: '13px',
+                border: 'none', cursor: txnWipeConfirmText === 'RESET TRANSACTIONS' && !txnWiping ? 'pointer' : 'not-allowed',
+                background: txnWipeConfirmText === 'RESET TRANSACTIONS' && !txnWiping ? '#c2410c' : '#fdba74',
+                color: '#fff', display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap',
+              }}
+            >
+              {txnWiping ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={14} />}
+              {txnWiping ? 'Resetting…' : 'Reset Transactions'}
+            </button>
+          </div>
+          {txnWipeResult && (
+            <div style={{
+              marginTop: '10px', padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 600,
+              background: txnWipeResult.ok ? '#ecfdf5' : '#fef2f2',
+              color: txnWipeResult.ok ? '#059669' : '#dc2626',
+              border: `1px solid ${txnWipeResult.ok ? '#a7f3d0' : '#fca5a5'}`,
+              display: 'flex', alignItems: 'center', gap: '8px',
+            }}>
+              {txnWipeResult.ok ? <Check size={14} /> : <AlertCircle size={14} />}
+              {txnWipeResult.msg}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Danger Zone */}

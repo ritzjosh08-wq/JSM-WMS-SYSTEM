@@ -3,7 +3,7 @@ title JSM Customer Portal - Netlify Deploy
 cd /d "%~dp0"
 
 echo ============================================
-echo Step 1/3: Building the app (with tunnel API URL baked in)...
+echo Step 1/3: Building the app (production API URL baked in from .env.production)...
 echo ============================================
 call npm run build
 if errorlevel 1 (
