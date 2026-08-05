@@ -462,7 +462,7 @@ function OutwardTable({ rows, onDelete, canDelete, onToggleLoaded }: { rows: any
                     </button>
                   </td>
                   <td style={{...TD,textAlign:'center',verticalAlign:'middle'}} rowSpan={spanCount}>
-                    <DeleteBtn onDelete={() => onDelete(entry.id)} />
+                    <DeleteBtn onDelete={() => onDelete(entry.id)} canDelete={canDelete} />
                   </td>
                 </>
               )}
@@ -635,7 +635,9 @@ function DiscrepancyTable({ rows, onDelete, canDelete }: { rows: any[]; onDelete
       </tr></thead>
       <tbody>{rows.map((r, i) => {
         const isShort = Number(r.shortInPallet || 0) < 0 || Number(r.shortExcessInKg || 0) < 0;
-        const rowBg = i % 2 === 0 ? '#fff' : '#fef9f9';
+        // Short (missing stock) is the more urgent case than excess — give it a slightly
+        // stronger tint so it stands out from ordinary excess/discrepancy rows at a glance.
+        const rowBg = isShort ? '#fef2f2' : i % 2 === 0 ? '#fff' : '#fef9f9';
         return (
           <tr key={r.id} style={{ background: rowBg }}>
             <td style={{...TD, fontFamily:'monospace', fontWeight:700, color:'#2563eb'}}>{r.inwardNumber}</td>
@@ -1468,6 +1470,13 @@ export default function Reports() {
         </div>
       )}
 
+      {/* Delete-in-progress indicator */}
+      {deletingId && (
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 16px', color: '#64748b', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Deleting record…
+        </div>
+      )}
+
       {/* Error banner */}
       {deleteError && (
         <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '10px', padding: '12px 16px', color: '#dc2626', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1512,13 +1521,17 @@ export default function Reports() {
                 style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 12px', background: '#fef2f2', border: '1.5px solid #fecaca', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#dc2626', cursor: 'pointer' }}>
                 <FileText size={12} /> PDF
               </button>
-              <div style={{ width: '1px', height: '24px', background: '#e2e8f0' }} />
-              <button
-                onClick={handleDeleteAll}
-                disabled={filteredRows.length === 0}
-                style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 14px', background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: '8px', fontSize: '12px', fontWeight: 800, color: '#dc2626', cursor: filteredRows.length === 0 ? 'not-allowed' : 'pointer', opacity: filteredRows.length === 0 ? 0.5 : 1 }}>
-                <Trash2 size={12} /> Remove All
-              </button>
+              {!isViewer && (
+                <>
+                  <div style={{ width: '1px', height: '24px', background: '#e2e8f0' }} />
+                  <button
+                    onClick={handleDeleteAll}
+                    disabled={filteredRows.length === 0}
+                    style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 14px', background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: '8px', fontSize: '12px', fontWeight: 800, color: '#dc2626', cursor: filteredRows.length === 0 ? 'not-allowed' : 'pointer', opacity: filteredRows.length === 0 ? 0.5 : 1 }}>
+                    <Trash2 size={12} /> Remove All
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -1590,11 +1603,11 @@ export default function Reports() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto', maxHeight: '520px', overflowY: 'auto' }}>
-              {activeTab === 'inward'      && <InwardTable      rows={inwardDisplayRows}      onDelete={handleDelete} />}
-              {activeTab === 'outward'     && <OutwardTable     rows={outwardDisplayRows}     onDelete={handleDelete} onToggleLoaded={handleToggleLoaded} />}
-              {activeTab === 'inventory'   && <InventoryTable   rows={inventoryDisplayRows}   onDelete={handleDelete} />}
+              {activeTab === 'inward'      && <InwardTable      rows={inwardDisplayRows}      onDelete={handleDelete} canDelete={!isViewer} />}
+              {activeTab === 'outward'     && <OutwardTable     rows={outwardDisplayRows}     onDelete={handleDelete} canDelete={!isViewer} onToggleLoaded={handleToggleLoaded} />}
+              {activeTab === 'inventory'   && <InventoryTable   rows={inventoryDisplayRows}   onDelete={handleDelete} canDelete={!isViewer} />}
               {activeTab === 'cycle-count'    && <CycleCountTable             rows={cycleDisplayRows} />}
-              {activeTab === 'discrepancy'    && <DiscrepancyTable            rows={discrepancyDisplayRows} onDelete={handleDelete} />}
+              {activeTab === 'discrepancy'    && <DiscrepancyTable            rows={discrepancyDisplayRows} onDelete={handleDelete} canDelete={!isViewer} />}
               {activeTab === 'cc-discrepancy' && <CycleCountDiscrepancyTable  rows={filteredRows} />}
             </div>
           )}

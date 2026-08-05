@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Info, Layers, Grid3X3, Warehouse } from 'lucide-react';
+import { RefreshCw, Layers, Grid3X3, Warehouse } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 
 const API = import.meta.env.VITE_API_BASE || 'http://localhost:5001/api';
@@ -67,7 +67,7 @@ interface Rack { id: string; code: string; rows: RackRow[]; }
 interface InventoryBatch {
   id: string; binId?: string; floorLocationId?: string;
   quantity: number; batchNumber: string; customFields?: string;
-  material?: { code: string; materialType: string; category?: string; huUnit?: string; };
+  material?: { code: string; description?: string; materialType: string; category?: string; huUnit?: string; };
 }
 
 function parseCF(s?: string | null) {
@@ -183,7 +183,6 @@ export default function WarehouseMap() {
   const totalFloor   = floor.length;
   const totalRack    = racks.reduce((s, r) => s + r.rows.reduce((ss, row) => ss + row.levels.reduce((sss, l) => sss + l.bins.length, 0), 0), 0);
   const totalBins    = totalFloor + totalRack;
-  const occupiedBins = binOccupancy.size;
 
   // Bin availability — split by floor vs rack
   const occupiedFloor = floor.filter(f => binOccupancy.has(f.id)).length;

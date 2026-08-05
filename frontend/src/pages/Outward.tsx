@@ -1,13 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
-  Truck, Plus, Trash2, Search, CheckCircle2, AlertTriangle,
-  Printer, Database, RefreshCw, Package, ChevronDown, ChevronUp,
-  ArrowUpFromLine, XCircle, Check, FileSpreadsheet
+  Truck, Plus, Search, CheckCircle2, AlertTriangle,
+  RefreshCw, Package, XCircle, FileSpreadsheet
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { useAuthStore, whQuery } from "../store/authStore";
+import { useAuthStore } from "../store/authStore";
 
 const API = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
 
@@ -62,15 +61,6 @@ interface RawBatch {
   stockStatus?: string;
   customFields: string | null;
   material: { code: string; description: string; materialType?: string; category?: string; huUnit?: string } | null;
-}
-
-interface InventoryMaterial {
-  code: string;
-  description: string;
-  materialType: string;
-  category: string;
-  huUnit: string;
-  totalQty: number;
 }
 
 // ─── Picklist Excel Export ────────────────────────────────────────────────────
@@ -149,129 +139,15 @@ function exportPicklistXLSX(
   XLSX.writeFile(wb, `Picklist_${outwardNumber}_${dateStr.replace(/\//g, "-")}.xlsx`);
 }
 
-// ─── Material Autocomplete ────────────────────────────────────────────────────
-function MaterialAutocomplete({
-  value, materials, loading, onSelect
-}: {
-  value: string;
-  materials: InventoryMaterial[];
-  loading: boolean;
-  onSelect: (code: string) => void;
-}) {
-  const [inputVal, setInputVal] = useState(value);
-  const [open, setOpen] = useState(false);
-  const [focused, setFocused] = useState(false);
-
-  // Keep input in sync when parent changes value (e.g. reset)
-  React.useEffect(() => { setInputVal(value); }, [value]);
-
-  const filtered = inputVal.trim() === ""
-    ? materials.slice(0, 12)
-    : materials.filter(m =>
-        m.code.toLowerCase().includes(inputVal.toLowerCase()) ||
-        m.description.toLowerCase().includes(inputVal.toLowerCase()) ||
-        m.materialType.toLowerCase().includes(inputVal.toLowerCase())
-      ).slice(0, 10);
-
-  const handleSelect = (code: string) => {
-    setInputVal(code);
-    setOpen(false);
-    onSelect(code);
-  };
-
-  return (
-    <div style={{ position: "relative" }}>
-      <div style={{ position: "relative" }}>
-        <input
-          value={inputVal}
-          onChange={e => { setInputVal(e.target.value); setOpen(true); }}
-          onFocus={() => { setFocused(true); setOpen(true); }}
-          onBlur={() => { setFocused(false); setTimeout(() => setOpen(false), 150); }}
-          placeholder={loading ? "Loading inventory…" : "Type material code or name…"}
-          style={{
-            width: "100%", border: `1.5px solid ${focused ? "#2563eb" : "#e2e8f0"}`,
-            borderRadius: "7px", padding: "6px 24px 6px 8px",
-            fontSize: "11px", fontWeight: 700, color: "#0f172a",
-            background: "#fff", outline: "none", boxSizing: "border-box",
-            transition: "border-color 0.1s",
-          }}
-        />
-        <Search size={11} style={{ position: "absolute", right: "7px", top: "50%", transform: "translateY(-50%)", color: "#94a3b8", pointerEvents: "none" }} />
-      </div>
-
-      {open && filtered.length > 0 && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 3px)", left: 0, right: 0, zIndex: 1000,
-          background: "#fff", border: "1.5px solid #bfdbfe", borderRadius: "9px",
-          boxShadow: "0 8px 24px rgba(37,99,235,0.12)", overflow: "hidden",
-        }}>
-          <div style={{ padding: "5px 10px", fontSize: "9px", fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.08em", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
-            {inputVal ? `${filtered.length} match${filtered.length !== 1 ? "es" : ""}` : "Available in inventory"}
-          </div>
-          {filtered.map(m => (
-            <div
-              key={m.code}
-              onMouseDown={() => handleSelect(m.code)}
-              style={{
-                padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid #f1f5f9",
-                display: "flex", flexDirection: "column", gap: "2px",
-                transition: "background 0.08s",
-              }}
-              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "#eff6ff"}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "#fff"}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{ fontFamily: "monospace", fontSize: "11px", fontWeight: 800, color: "#1e40af" }}>{m.code}</span>
-                {m.materialType && <span style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe", borderRadius: "4px", padding: "1px 5px", fontSize: "9px", fontWeight: 700 }}>{m.materialType}</span>}
-                <span style={{ marginLeft: "auto", background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "4px", padding: "1px 6px", fontSize: "9px", fontWeight: 700 }}>
-                  {m.totalQty.toFixed(0)} avail
-                </span>
-              </div>
-              <div style={{ fontSize: "10px", color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.description}</div>
-            </div>
-          ))}
-          {inputVal && filtered.length === 0 && (
-            <div style={{ padding: "12px", fontSize: "11px", color: "#94a3b8", textAlign: "center" }}>No matching materials in inventory</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function makeLineId() {
   return `line-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function emptyLine(): OutwardLine {
-  return {
-    id: makeLineId(),
-    materialCode: "",
-    materialType: "",
-    description: "",
-    category: "RM",
-    huUnit: "Nos",
-    requiredQty: 0,
-    matchStatus: "PENDING",
-    availableQty: 0,
-    recommendations: [],
-    expanded: false,
-  };
-}
-
-const MATCH_CONFIG = {
-  PENDING:   { bg: "#f8fafc", border: "#e2e8f0", text: "#64748b", label: "Not Checked" },
-  LOADING:   { bg: "#eff6ff", border: "#bfdbfe", text: "#2563eb", label: "Checking…" },
-  FOUND:     { bg: "#ecfdf5", border: "#a7f3d0", text: "#059669", label: "✓ Available" },
-  SHORT:     { bg: "#fef2f2", border: "#fca5a5", text: "#dc2626", label: "✗ Insufficient" },
-  NOT_FOUND: { bg: "#fef2f2", border: "#fecaca", text: "#dc2626", label: "✗ Not Found" },
-};
-
 // ─── Main Component ───────────────────────────────────────────────────────────
 const DRAFT_KEY = "jsm_outward_draft";
 
-function loadDraft(): { header: DispatchHeader; lines: OutwardLine[] } | null {
+function loadDraft(): { header: DispatchHeader } | null {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (raw) return JSON.parse(raw);
@@ -279,8 +155,8 @@ function loadDraft(): { header: DispatchHeader; lines: OutwardLine[] } | null {
   return null;
 }
 
-function saveDraft(header: DispatchHeader, lines: OutwardLine[]) {
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ header, lines })); } catch {}
+function saveDraft(header: DispatchHeader) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ header })); } catch {}
 }
 
 function clearDraft() {
@@ -324,19 +200,13 @@ export default function OutwardClient() {
     lrNumber: "",
     createdBy: "",
   });
-  const [lines, setLines] = useState<OutwardLine[]>(draft?.lines ?? [emptyLine()]);
-  const [inventoryMaterials, setInventoryMaterials] = useState<InventoryMaterial[]>([]);
   const [allBatches, setAllBatches] = useState<RawBatch[]>([]);
   const [loadingMaterials, setLoadingMaterials] = useState(true);
   const [dispatching, setDispatching] = useState(false);
   const [dispatchResult, setDispatchResult] = useState<{ outwardNumber: string } | null>(null);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   // Snapshot of what was ACTUALLY dispatched (HU-unit flow), used to build the picklist
-  // export. The `lines` state below belongs to a separate, unused material-code/FIFO entry
-  // flow that this page never renders — exporting from `lines` after a real HU-based
-  // dispatch silently produced an EMPTY picklist (confirmed.length was always 0), so the
-  // "Excel picklist downloading automatically" success message was not actually true. This
-  // snapshot is populated with the real picked batches right before the dispatch call.
+  // export — populated with the real picked batches right before the dispatch call.
   const [dispatchedLines, setDispatchedLines] = useState<OutwardLine[]>([]);
 
   // HU unit entry workflow
@@ -349,8 +219,8 @@ export default function OutwardClient() {
   // Per-batch dispatch qty (partial dispatch — defaults to full batch quantity)
   const [huBatchQtys, setHuBatchQtys] = useState<Map<string, number>>(new Map());
 
-  // ── Persist draft to localStorage whenever header/lines change
-  useEffect(() => { saveDraft(header, lines); }, [header, lines]);
+  // ── Persist draft to localStorage whenever header changes
+  useEffect(() => { saveDraft(header); }, [header]);
 
   // ── Fetch live inventory materials + raw batches
   useEffect(() => {
@@ -361,146 +231,10 @@ export default function OutwardClient() {
         const inv: any[] = Array.isArray(data.inventory) ? data.inventory : [];
         // Store raw batches (for HU unit lookup — include discrepancy items too)
         setAllBatches(inv.filter(i => i.quantity > 0 && i.material?.code).map(i => ({ ...i, stockStatus: i.stockStatus })));
-        // Aggregate by material code for the autocomplete
-        const map = new Map<string, InventoryMaterial>();
-        inv.forEach(item => {
-          if (item.quantity <= 0 || !item.material?.code) return;
-          let cf: any = {};
-          try { cf = JSON.parse(item.customFields || "{}"); } catch {}
-          const code = item.material.code;
-          const cat = (item.material.category || cf.category || item.material.materialType || "").toUpperCase();
-          if (!map.has(code)) {
-            map.set(code, {
-              code,
-              description: item.material.description || "",
-              materialType: cf.materialType || "",
-              category: cat,
-              huUnit: cf.huUnit || item.material.huUnit || "Nos",
-              totalQty: 0,
-            });
-          }
-          map.get(code)!.totalQty += item.quantity;
-        });
-        setInventoryMaterials(Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code)));
       })
       .catch(() => {})
       .finally(() => setLoadingMaterials(false));
   }, []);
-
-  // ── Line management
-  const updateLine = useCallback((id: string, patch: Partial<OutwardLine>) => {
-    setLines(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l));
-  }, []);
-
-  const selectMaterial = useCallback((lineId: string, code: string) => {
-    const mat = inventoryMaterials.find(m => m.code === code);
-    if (mat) {
-      updateLine(lineId, {
-        materialCode: mat.code,
-        description: mat.description,
-        materialType: mat.materialType,
-        category: mat.category,
-        huUnit: mat.huUnit || "Nos",
-        availableQty: mat.totalQty,
-        matchStatus: "PENDING",
-        recommendations: [],
-      });
-    } else {
-      updateLine(lineId, { materialCode: code, matchStatus: "PENDING", recommendations: [] });
-    }
-  }, [inventoryMaterials, updateLine]);
-
-  // ── FIFO check for a single line
-  const checkLine = useCallback(async (line: OutwardLine) => {
-    if (!line.materialCode || line.requiredQty <= 0) {
-      updateLine(line.id, { matchStatus: "NOT_FOUND" });
-      return;
-    }
-    updateLine(line.id, { matchStatus: "LOADING" });
-    try {
-      const wcParam = whQuery(selectedWorker, '&');
-      const res = await fetch(`${API}/outward/fifo?materialCode=${encodeURIComponent(line.materialCode)}&requiredQty=${line.requiredQty}${wcParam}`);
-      const data = await res.json();
-      const recs: FifoRec[] = data.recommendations || [];
-      const pickedTotal = recs.reduce((s, r) => s + r.recommendedPick, 0);
-      const status = recs.length === 0 ? "NOT_FOUND" : pickedTotal >= line.requiredQty ? "FOUND" : "SHORT";
-      updateLine(line.id, { recommendations: recs, matchStatus: status, availableQty: data.totalAvailable || pickedTotal, expanded: true });
-    } catch {
-      updateLine(line.id, { matchStatus: "NOT_FOUND", recommendations: [] });
-    }
-  }, [updateLine]);
-
-  const checkAll = async () => {
-    for (const line of lines) {
-      await checkLine(line);
-    }
-  };
-
-  // ── Dispatch
-  const handleDispatch = async () => {
-    // Validate — use alert so it's impossible to miss
-    if (!header.truckNumber.trim()) {
-      alert("⚠ Truck Number is required before dispatching.");
-      return;
-    }
-    const readyLines = lines.filter(l => l.matchStatus === "FOUND" || l.matchStatus === "SHORT");
-    if (!readyLines.length) {
-      alert("⚠ Click 'Check All Inventory' first to confirm stock availability.");
-      return;
-    }
-    const totalPicks = readyLines.reduce((s, l) => s + l.recommendations.filter(r => r.recommendedPick > 0).length, 0);
-    if (totalPicks === 0) {
-      alert("⚠ No stock was allocated. Please check inventory and try again.");
-      return;
-    }
-
-    // Confirmation summary dialog
-    const summary = readyLines.map(l =>
-      `• ${l.materialCode} — ${l.recommendations.reduce((s, r) => s + r.recommendedPick, 0).toFixed(0)} ${l.huUnit} picked`
-    ).join("\n");
-    const confirmed = window.confirm(
-      `Confirm Dispatch to ${header.destination || "destination"}?\n\nTruck: ${header.truckNumber}\nDate: ${header.date}\n\nMaterials:\n${summary}\n\nThis will deduct from inventory immediately.`
-    );
-    if (!confirmed) return;
-
-    setDispatching(true); setDispatchError(null);
-    try {
-      const res = await fetch(`${API}/outward/dispatch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...header,
-          lines: readyLines.map(l => ({
-            materialCode: l.materialCode,
-            materialType: l.materialType,
-            description: l.description,
-            category: l.category,
-            huUnit: l.huUnit,
-            requiredQty: l.requiredQty,
-            picks: l.recommendations.filter(r => r.recommendedPick > 0).map(r => ({
-              batchId: r.batchId,
-              batchNumber: r.batchNumber,
-              pickQty: r.recommendedPick,
-              stockLocation: r.stockLocation,
-              warehouseId: r.warehouseId,
-            })),
-          })),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Dispatch failed");
-      clearDraft();
-      setDispatchResult({ outwardNumber: data.outwardNumber });
-      // Auto-export picklist
-      setTimeout(() => exportPicklistXLSX(header, lines, data.outwardNumber, true), 300);
-    } catch (e: any) {
-      const msg = e.message || "Unknown error";
-      setDispatchError(msg);
-      alert(`❌ Dispatch failed: ${msg}\n\nPlease check that the backend server is running and try again.`);
-    } finally {
-      setDispatching(false);
-    }
-  };
 
   // ── HU unit search
   const findHUMaterials = () => {
@@ -535,17 +269,15 @@ export default function OutwardClient() {
     setHuSearched(true);
   };
 
-  // ── HU-based dispatch
-  const handleHUDispatch = async () => {
-    if (!header.truckNumber.trim()) {
-      alert("⚠ Truck Number is required before dispatching."); return;
-    }
+  // ── Build both the FIFO-dispatch payload (grouped by material) and the picklist-export
+  // snapshot from whatever's currently selected in the HU table. Shared by the pre-dispatch
+  // "Export Picklist" preview button and the real handleHUDispatch commit below, so the
+  // picklist a worker prints to go pick pallets is byte-for-byte the same data that's about
+  // to be dispatched — no separate code path to drift out of sync.
+  const buildHULines = useCallback(() => {
     const selected = matchedBatches.filter(b => selectedBatchIds.has(b.id));
-    if (!selected.length) {
-      alert("⚠ Select at least one batch to dispatch."); return;
-    }
+    if (!selected.length) return null;
 
-    // Group by material code → build lines structure
     const lineMap = new Map<string, { materialCode: string; description: string; materialType: string; category: string; huUnit: string; requiredQty: number; picks: any[] }>();
     selected.forEach(b => {
       const cf = parseCF(b.customFields);
@@ -578,11 +310,6 @@ export default function OutwardClient() {
     });
     const dispatchLines = Array.from(lineMap.values());
 
-    const summary = dispatchLines.map(l => `• ${l.materialCode} — ${l.requiredQty.toFixed(0)} units`).join("\n");
-    if (!window.confirm(`Confirm Dispatch to ${header.destination || "destination"}?\n\nTruck: ${header.truckNumber}\nOutbound Invoice: ${header.outboundInvoiceNo || "—"}\n\nMaterials:\n${summary}\n\nThis will deduct from inventory immediately.`)) return;
-
-    // Build the picklist-export snapshot from what's actually being dispatched — this is
-    // the fix for the broken/empty picklist export (see note on dispatchedLines state above).
     const exportLines: OutwardLine[] = dispatchLines.map(l => ({
       id: makeLineId(),
       materialCode: l.materialCode,
@@ -610,6 +337,34 @@ export default function OutwardClient() {
       })),
     }));
 
+    return { dispatchLines, exportLines };
+  }, [matchedBatches, selectedBatchIds, huBatchQtys]);
+
+  // ── Export a picklist for the current selection WITHOUT dispatching — lets a worker
+  // pick the indent's pallets against a printed/exported sheet first, then come back and
+  // hit Confirm Dispatch once picking is actually done. Nothing is deducted from inventory
+  // here; it's purely a read-only export of what's currently selected.
+  const handleExportPicklistPreview = () => {
+    const built = buildHULines();
+    if (!built) { alert("⚠ Select at least one batch to export a picklist for."); return; }
+    const label = header.outboundInvoiceNo?.trim() || "DRAFT";
+    exportPicklistXLSX(header, built.exportLines, label, false);
+  };
+
+  // ── HU-based dispatch
+  const handleHUDispatch = async () => {
+    if (!header.truckNumber.trim()) {
+      alert("⚠ Truck Number is required before dispatching."); return;
+    }
+    const built = buildHULines();
+    if (!built) {
+      alert("⚠ Select at least one batch to dispatch."); return;
+    }
+    const { dispatchLines, exportLines } = built;
+
+    const summary = dispatchLines.map(l => `• ${l.materialCode} — ${l.requiredQty.toFixed(0)} units`).join("\n");
+    if (!window.confirm(`Confirm Dispatch to ${header.destination || "destination"}?\n\nTruck: ${header.truckNumber}\nOutbound Invoice: ${header.outboundInvoiceNo || "—"}\n\nMaterials:\n${summary}\n\nThis will deduct from inventory immediately.`)) return;
+
     setDispatching(true); setDispatchError(null);
     try {
       const res = await fetch(`${API}/outward/dispatch`, {
@@ -636,7 +391,6 @@ export default function OutwardClient() {
 
   const resetForm = () => {
     clearDraft();
-    setLines([emptyLine()]);
     setDispatchResult(null);
     setDispatchError(null);
     setDispatchedLines([]);
@@ -923,8 +677,13 @@ export default function OutwardClient() {
                         {totalRemaining > 0 && <> · Remaining in inventory: <strong>{totalRemaining.toFixed(0)}</strong></>}
                       </div>
                     </div>
+                    <button onClick={handleExportPicklistPreview} disabled={dispatching}
+                      title="Download the picklist for what's selected — nothing is dispatched or deducted yet. Pick the pallets against this sheet, then come back and Confirm Dispatch."
+                      style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", background: "#fff", border: "1.5px solid #1e40af", borderRadius: "9px", color: "#1e40af", fontSize: "13px", fontWeight: 800, cursor: dispatching ? "not-allowed" : "pointer" }}>
+                      <FileSpreadsheet size={14} /> Export Picklist
+                    </button>
                     <button onClick={handleHUDispatch} disabled={dispatching}
-                      style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px", padding: "10px 24px", background: "#059669", border: "none", borderRadius: "9px", color: "#fff", fontSize: "13px", fontWeight: 800, cursor: dispatching ? "not-allowed" : "pointer", boxShadow: "0 2px 8px rgba(5,150,105,0.3)" }}>
+                      style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 24px", background: "#059669", border: "none", borderRadius: "9px", color: "#fff", fontSize: "13px", fontWeight: 800, cursor: dispatching ? "not-allowed" : "pointer", boxShadow: "0 2px 8px rgba(5,150,105,0.3)" }}>
                       {dispatching
                         ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Dispatching…</>
                         : <><Truck size={14} /> Confirm Dispatch</>}

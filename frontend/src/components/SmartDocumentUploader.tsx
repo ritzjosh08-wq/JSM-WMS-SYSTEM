@@ -144,7 +144,7 @@ export default function SmartDocumentUploader({ onProcessComplete, expectedField
               <FileText className="text-brand-blue" size={24} />
               <div>
                 <p className="font-semibold">{file.name}</p>
-                <p className="text-xs text-gray-500">{rawRows.length} records extracted</p>
+                <p className="text-xs text-gray-500">{isProcessing ? "Processing…" : `${rawRows.length} records extracted`}</p>
               </div>
             </div>
             <button 

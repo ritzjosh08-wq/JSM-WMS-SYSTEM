@@ -28,7 +28,7 @@ interface InventoryItem {
     huUnit: string;
     category: string | null;
   } | null;
-  warehouse: { id: string; name: string } | null;
+  warehouse: { id: string; name: string; code: string } | null;
   rack: { id: string; code: string } | null;
   bin: {
     id: string;
@@ -92,16 +92,6 @@ interface EnrichedItem extends InventoryItem {
 type SortField = "materialCode" | "description" | "quantity" | "receiptDate" | "category";
 type SortDir = "asc" | "desc";
 type ViewMode = "ALL" | "RM" | "FG";
-
-async function patchInventoryQty(id: string, quantity: number) {
-  const res = await fetch(`${API}/inventory/${id}/adjust`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ quantity }),
-  });
-  if (!res.ok) throw new Error("Failed to adjust");
-  return res.json();
-}
 
 // Generic units-of-measure aren't unique physical pallet tags — exclude them when bulk-copying
 // HU units so the paste target (Outward's HU Unit Entry box) only gets real, searchable codes.
@@ -174,76 +164,6 @@ function CopyableHU({ value, copiedKey, activeKey, onCopy, selected, onToggleSel
   );
 }
 
-// ── Inline qty editor cell ─────────────────────────────────────────────────
-function QtyEditCell({
-  item, onSaved
-}: { item: EnrichedItem; onSaved: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(String(item.quantity));
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    const q = parseFloat(val);
-    if (isNaN(q) || q < 0) return;
-    setSaving(true);
-    try {
-      await patchInventoryQty(item.id, q);
-      onSaved();
-      setEditing(false);
-    } catch {
-      alert("Could not save adjustment — check backend is running.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!editing) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-        <span style={{ fontWeight: 700, fontSize: "13px", color: item.quantity <= 0 ? "#dc2626" : "#0f172a" }}>
-          {item.quantity.toFixed(2)}
-        </span>
-        <button
-          onClick={() => { setVal(String(item.quantity)); setEditing(true); }}
-          style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: "#94a3b8", padding: "2px",
-          }}
-          title="Edit quantity"
-        >
-          <Edit3 size={12} />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-      <input
-        autoFocus
-        type="number"
-        value={val}
-        onChange={e => setVal(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
-        style={{
-          width: "70px", border: "2px solid #2563eb", borderRadius: "6px",
-          padding: "2px 6px", fontSize: "12px", fontWeight: 700,
-        }}
-      />
-      <button
-        onClick={save} disabled={saving}
-        style={{ background: "#dcfce7", border: "1px solid #86efac", borderRadius: "5px", padding: "2px 5px", cursor: "pointer" }}
-        title="Save"
-      ><Check size={11} style={{ color: "#16a34a" }} /></button>
-      <button
-        onClick={() => setEditing(false)}
-        style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "5px", padding: "2px 5px", cursor: "pointer" }}
-        title="Cancel"
-      ><X size={11} style={{ color: "#dc2626" }} /></button>
-    </div>
-  );
-}
-
 // ── Stable helper components (defined OUTSIDE modal to avoid remount on every keystroke) ──
 function ModalInput({
   label, value, onChange, type = "text",
@@ -267,10 +187,9 @@ function SectionTitle({ label, color }: { label: string; color: string }) {
 
 // ── Edit Detail Modal ──────────────────────────────────────────────────────
 function EditDetailModal({
-  item, warehouses, onSaved, onClose, isViewer
+  item, onSaved, onClose, isViewer
 }: {
   item: EnrichedItem;
-  warehouses: any[];
   onSaved: () => void;
   onClose: () => void;
   isViewer?: boolean;
@@ -321,8 +240,8 @@ function EditDetailModal({
         // Remove binLocation/stockLocation from cf here — backend will set them
         // after resolving the warehouse-scoped floor location.
       };
-      delete newCf.binLocation;
-      delete newCf.stockLocation;
+      delete (newCf as Record<string, any>).binLocation;
+      delete (newCf as Record<string, any>).stockLocation;
 
       const res = await fetch(`${API}/inventory/${item.id}`, {
         method: "PATCH",
@@ -1111,7 +1030,6 @@ export default function InventoryClient() {
       {selectedItem && (
         <EditDetailModal
           item={selectedItem}
-          warehouses={warehouses}
           onClose={() => setSelectedItem(null)}
           onSaved={() => { setSelectedItem(null); load(); }}
           isViewer={isViewer}

@@ -83,7 +83,7 @@ function calcTAT(inTime: string, outTime: string): string {
 // Excel column guide
 // ─────────────────────────────────────────────────────────────────────────────
 // Excel column header → ManualEntry field mapping (exact header names from JSM sheet)
-const EXCEL_COL_MAP: { header: string; field: keyof typeof EMPTY_ENTRY | "__short_plt" | "__short_kg" }[] = [
+export const EXCEL_COL_MAP: { header: string; field: keyof typeof EMPTY_ENTRY | "__short_plt" | "__short_kg" }[] = [
   { header: "Gate Serial No",        field: "gateSerialNo"        },
   { header: "Date",                  field: "date"                },
   { header: "Source",                field: "source"              },
@@ -791,8 +791,6 @@ const EntryFormModal = ({
       setForm((p) => ({ ...p, shortExcessInQty: (p.receivedQtyInNos || 0) - (p.invoiceQtyInNos || 0) }));
     }
   }, [form.invoiceQtyInNos, form.receivedQtyInNos]);
-
-  const gridCols = (n: number) => `grid grid-cols-${n} gap-4 mb-5`;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-center overflow-y-auto p-6">

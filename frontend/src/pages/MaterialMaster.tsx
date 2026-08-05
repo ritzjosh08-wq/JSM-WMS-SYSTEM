@@ -166,7 +166,7 @@ function WHChart({
             <Tooltip
               contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px', boxShadow:'0 4px 16px rgba(0,0,0,0.08)' }}
               labelStyle={{ fontWeight:700, color:'#0f172a', marginBottom:'4px', fontSize:'12px' }}
-              formatter={(v: any, name: string) => [Number(v).toFixed(0), name === 'pallets' ? 'Pallets' : 'Qty (Nos)']}
+              formatter={(v: any, name: any) => [Number(v).toFixed(0), name === 'pallets' ? 'Pallets' : 'Qty (Nos)']}
             />
             <Legend
               iconType="circle"
@@ -375,7 +375,7 @@ export default function MaterialMaster() {
                     </Pie>
                     <Tooltip
                       contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
-                      formatter={(value: any, name: string) => [`${Number(value).toFixed(0)} pallets`, name]}
+                      formatter={(value: any, name: any) => [`${Number(value).toFixed(0)} pallets`, name]}
                     />
                   </PieChart>
                 </ResponsiveContainer>
@@ -430,7 +430,7 @@ export default function MaterialMaster() {
                 <Tooltip
                   contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
                   labelStyle={{ fontWeight:700, color:'#0f172a', marginBottom:'4px' }}
-                  formatter={(v: any, name: string) => [Number(v).toFixed(1), name === 'pallets' ? 'Pallets' : 'Net Wt (kg)']}
+                  formatter={(v: any, name: any) => [Number(v).toFixed(1), name === 'pallets' ? 'Pallets' : 'Net Wt (kg)']}
                 />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:'10px', paddingTop:'6px' }}
                   formatter={(v) => v === 'pallets' ? 'Pallets' : 'Net Wt (kg)'} />
@@ -503,7 +503,7 @@ export default function MaterialMaster() {
             <Tooltip
               contentStyle={{ borderRadius:'10px', border:'1px solid #e2e8f0', fontSize:'11px' }}
               labelStyle={{ fontWeight:700, color:'#0f172a', marginBottom:'4px' }}
-              formatter={(v: any, name: string) => [v, name === 'inward' ? '↓ Inward entries' : '↑ Outbound entries']}
+              formatter={(v: any, name: any) => [v, name === 'inward' ? '↓ Inward entries' : '↑ Outbound entries']}
             />
             <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:'10px', paddingTop:'6px' }}
               formatter={(name: string) => name === 'inward' ? '↓ Inward' : '↑ Outbound'} />

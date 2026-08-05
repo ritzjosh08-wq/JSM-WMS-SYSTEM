@@ -3,7 +3,7 @@ import { Activity } from "lucide-react";
 import { useAuthStore } from "../../store/authStore";
 
 export default function Header() {
-  const { user, logout } = useAuthStore();
+  const { user } = useAuthStore();
   const [now, setNow] = useState("");
 
   useEffect(() => {
