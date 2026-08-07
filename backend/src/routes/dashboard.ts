@@ -2,7 +2,7 @@ import express from 'express';
 import { prisma } from '../lib/prisma';
 import fs from 'fs';
 import path from 'path';
-import { resolveScopedCodes, FORBIDDEN_CODE } from '../middleware/auth';
+import { resolveScopedCodes, FORBIDDEN_CODE, requireRole } from '../middleware/auth';
 
 const router = express.Router();
 
@@ -209,14 +209,29 @@ router.get('/', async (req, res) => {
     try {
       const _n = new Date();
       const today = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
-      const ccRows  = await prisma.$queryRawUnsafe<[{count: any}]>(
-        `SELECT COUNT(*) as count FROM "DailyCycleSession" s
-         JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
-         WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS')
-           AND s."scheduledDate" <= $1
-           AND t.status = 'ACTIVE'`,
-        today
-      );
+      // Was missing the "AND t.warehouseId = $2" filter that the multi-warehouse branch
+      // above already has — this counted PENDING/OVERDUE/IN_PROGRESS sessions across every
+      // warehouse, not just the one this dashboard call was scoped to. A CUSTOMER/WORKER
+      // viewing their own single warehouse would see other warehouses' pending counts mixed
+      // into their own number — both a data leak and a wrong figure on their dashboard.
+      const ccRows  = warehouseId
+        ? await prisma.$queryRawUnsafe<[{count: any}]>(
+            `SELECT COUNT(*) as count FROM "DailyCycleSession" s
+             JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
+             WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS')
+               AND s."scheduledDate" <= $1
+               AND t.status = 'ACTIVE'
+               AND t."warehouseId" = $2`,
+            today, warehouseId
+          )
+        : await prisma.$queryRawUnsafe<[{count: any}]>(
+            `SELECT COUNT(*) as count FROM "DailyCycleSession" s
+             JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
+             WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS')
+               AND s."scheduledDate" <= $1
+               AND t.status = 'ACTIVE'`,
+            today
+          ); // no warehouseId only reachable here for ADMIN viewing the all-warehouses dashboard
       pendingCycleCounts = Number(ccRows[0]?.count ?? 0);
     } catch {
       pendingCycleCounts = await prisma.cycleCount.count({ where: { status: 'PENDING' } }).catch(() => 0);
@@ -255,7 +270,11 @@ router.get('/', async (req, res) => {
 });
 
 // ── GET /all-workers — per-worker summary cards for Admin overview ─────────────
-router.get('/all-workers', async (req, res) => {
+// Was reachable by any authenticated role (WORKER, CUSTOMER) with no guard at all,
+// despite returning every worker's name/location/warehouse stats system-wide — exactly
+// what the comment above already says this is for ("Admin overview"). Gating it to
+// match the documented intent.
+router.get('/all-workers', requireRole('ADMIN'), async (req, res) => {
   try {
     const locFilter = (req.query.location as string | undefined)?.trim().toLowerCase();
     let workers = getWorkerUsers();

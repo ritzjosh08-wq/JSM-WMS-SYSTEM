@@ -1222,12 +1222,26 @@ export default function Reports() {
 
   const handleDelete = async (id: string) => {
     if (!activeTab) return;
-    if (!window.confirm('Delete this record? This cannot be undone.')) return;
+    // Deleting an outward dispatch now restores the stock it depleted (previously it
+    // didn't — the goods stayed marked as shipped forever even if the entry was a
+    // mistake). Worth telling the operator that at the point of action, not just fixing
+    // it silently.
+    const confirmMsg = activeTab === 'outward'
+      ? 'Delete this dispatch? This cannot be undone — the inventory it depleted will be credited back to stock.'
+      : 'Delete this record? This cannot be undone.';
+    if (!window.confirm(confirmMsg)) return;
     setDeletingId(id);
     try {
       const res = await fetch(`${API}${deleteEndpoint(activeTab, id)}`, { method: 'DELETE' });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Delete failed'); }
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || 'Delete failed');
       setRows(prev => prev.filter(r => r.id !== id));
+      if (d.needsManualReview?.length) {
+        window.alert(`Stock quantity was restored, but pallets/net weight for batch(es) ${d.needsManualReview.join(', ')} could not be recalculated automatically (the batch was fully depleted) — please check those on the Inventory page.`);
+      }
+      if (d.notRestored?.length) {
+        window.alert(`Note: material(s) ${d.notRestored.join(', ')} on this dispatch predate automatic stock restoration and were NOT credited back — adjust their inventory manually if needed.`);
+      }
     } catch (e: any) {
       setDeleteError(e.message);
     } finally {

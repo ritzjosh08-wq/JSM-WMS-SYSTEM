@@ -342,10 +342,19 @@ router.get('/valid-bins', async (req, res) => {
 });
 
 // ── GET /api/warehouse/list — all warehouses for dropdown ─────────────
+// Same cross-tenant gap as GET /api/cycle-count/warehouses: this returned every active
+// warehouse (id/code/name) to any authenticated role, including CUSTOMER — this router
+// is even documented (see the comment on resolveScopedCodes in middleware/auth.ts) as
+// one that MUST scope its output. ADMIN/WORKER dropdowns are unaffected; a CUSTOMER
+// account now only sees warehouses within their own scope.
 router.get('/list', async (req, res) => {
   try {
+    const allowedCodes = req.user?.role === 'ADMIN' ? null : resolveScopedCodes(req, []);
     const warehouses = await prisma.warehouse.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        ...(allowedCodes ? { code: { in: allowedCodes } } : {}),
+      },
       select: { id: true, code: true, name: true, storageType: true },
       orderBy: { code: 'asc' },
     });

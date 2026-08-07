@@ -122,6 +122,10 @@ router.post('/dispatch', requireRole('ADMIN', 'WORKER'), async (req, res) => {
           huUnit:        line.huUnit       || '',
           category:      line.category     || '',
           stockLocation: pick.stockLocation || '',
+          // Needed so DELETE /:id (below) can find and credit back the EXACT batch this
+          // pick depleted, instead of guessing by materialCode+batchNumber (which isn't
+          // guaranteed unique — see the comment on DELETE /:id).
+          batchId:       pick.batchId || '',
         }),
       }))
     );
@@ -287,12 +291,100 @@ router.patch('/:id/loaded', requireRole('ADMIN', 'WORKER'), async (req, res) => 
   }
 });
 
+// Deleting an outward entry used to just remove the record — the InventoryBatch rows it
+// had depleted stayed depleted forever, permanently losing stock that never actually left
+// the warehouse (e.g. a worker dispatching the wrong batch by mistake, then deleting the
+// entry to undo it). Fixed to credit each affected batch back, mirroring /dispatch's own
+// locking (SELECT ... FOR UPDATE inside one transaction) so a delete racing a fresh
+// dispatch against the same batch can't corrupt either one.
+//
+// `quantity` and `usedCapacity` are restored exactly (newQty = current + pickedQty is a
+// plain reversible sum, no information lost). The derived DISPLAY fields dispatch also
+// scales down (cf.pallets/cf.netWeight/etc, proportionally by how much of the batch's
+// pre-pick quantity was picked) are only exactly reversible when the batch has quantity
+// left to divide back by — a full pick that zeroed the batch collapses that ratio to 0/0,
+// with no way to recover the original split from the current (already-zeroed) numbers
+// alone. In that case `quantity` is still restored correctly; pallets/net weight are left
+// as-is and flagged in the response so whoever deleted it knows to sanity-check those two
+// display fields on the Inventory page afterward.
 router.delete('/:id', requireRole('ADMIN', 'WORKER'), async (req, res) => {
   try {
     const id: string = String(req.params.id);
-    await prisma.outwardLineItem.deleteMany({ where: { outwardEntryId: id } });
-    await prisma.outwardEntry.delete({ where: { id } });
-    res.json({ success: true });
+
+    const needsManualReview: string[] = [];
+    const skippedNoBatchId: string[] = [];
+
+    await prisma.$transaction(async (tx) => {
+      const lineItems = await tx.outwardLineItem.findMany({ where: { outwardEntryId: id } });
+
+      for (const li of lineItems) {
+        let cf: any = {};
+        try { cf = JSON.parse(li.customFields || '{}'); } catch {}
+        const batchId = (cf.batchId || '').trim();
+        const pickedQty = Number(li.pickedQty) || 0;
+        if (!batchId || pickedQty <= 0) {
+          // Pre-existing line item from before batchId was captured (see /dispatch above) —
+          // no reliable way to know which exact InventoryBatch row to credit, so this one
+          // can't be auto-restored. Surfaced in the response rather than silently skipped.
+          if (pickedQty > 0) skippedNoBatchId.push(li.materialCode);
+          continue;
+        }
+
+        const locked = await tx.$queryRawUnsafe<any[]>(
+          `SELECT * FROM "InventoryBatch" WHERE id = $1 FOR UPDATE`, batchId
+        );
+        const batch = locked[0];
+        if (!batch) continue; // batch itself no longer exists (e.g. a full data reset) — nothing to credit back
+
+        let batchCf: any = {};
+        try { batchCf = JSON.parse(batch.customFields || '{}'); } catch {}
+
+        const currentQty = Number(batch.quantity) || 0;
+        const restoredQty = currentQty + pickedQty;
+        const num = (v: any): number => parseFloat(String(v ?? '')) || 0;
+
+        const restoredCf = { ...batchCf };
+        // Exactly reversible (plain subtraction in /dispatch): safe to always restore.
+        restoredCf.nos              = num(batchCf.nos)              + pickedQty;
+        restoredCf.receivedQtyInNos = num(batchCf.receivedQtyInNos) + pickedQty;
+        if (currentQty > 0) {
+          // Ratio still recoverable — undo the same proportional scale-down /dispatch applied.
+          const scaleUp = restoredQty / currentQty;
+          restoredCf.pallets              = num(batchCf.pallets)              * scaleUp;
+          restoredCf.netWeight            = num(batchCf.netWeight)            * scaleUp;
+          restoredCf.invoiceQtyInPallet   = num(batchCf.invoiceQtyInPallet)   * scaleUp;
+          restoredCf.receivedQtyInPallets = num(batchCf.receivedQtyInPallets) * scaleUp;
+          restoredCf.invoiceNetWeight     = num(batchCf.invoiceNetWeight)     * scaleUp;
+          restoredCf.receivedNetWeight    = num(batchCf.receivedNetWeight)    * scaleUp;
+          restoredCf.numberOfBoxes        = num(batchCf.numberOfBoxes)        * scaleUp;
+        } else {
+          // Batch was fully depleted by this pick — ratio is unrecoverable from here.
+          needsManualReview.push(batch.batchNumber || batchId);
+        }
+
+        await tx.inventoryBatch.update({
+          where: { id: batch.id },
+          data: { quantity: restoredQty, lastMovementDate: new Date(), customFields: JSON.stringify(restoredCf) },
+        });
+
+        const wh = await tx.warehouse.findUnique({ where: { id: batch.warehouseId } });
+        if (wh) {
+          await tx.warehouse.update({
+            where: { id: wh.id },
+            data: { usedCapacity: wh.usedCapacity + pickedQty },
+          });
+        }
+      }
+
+      await tx.outwardLineItem.deleteMany({ where: { outwardEntryId: id } });
+      await tx.outwardEntry.delete({ where: { id } });
+    });
+
+    res.json({
+      success: true,
+      ...(needsManualReview.length ? { needsManualReview } : {}),
+      ...(skippedNoBatchId.length ? { notRestored: skippedNoBatchId } : {}),
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

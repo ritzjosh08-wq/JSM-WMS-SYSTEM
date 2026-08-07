@@ -1,12 +1,37 @@
 import express from 'express';
 import { prisma } from '../lib/prisma';
 import crypto from 'crypto';
-import { resolveScopedCodes, requireRole } from '../middleware/auth';
+import { resolveScopedCodes, requireRole, FORBIDDEN_CODE } from '../middleware/auth';
 
 const router = express.Router();
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const newId = () => crypto.randomUUID();
+
+// ── assertWarehouseScope — server-side cross-tenant guard ─────────────────────
+// Every route below identifies its target by an internal warehouseId (or a
+// session/task id that belongs to one), which the CLIENT supplies directly —
+// there was previously no check anywhere in this file that req.user is actually
+// allowed to see that warehouse. resolveScopedCodes() (already used correctly by
+// GET /records below) is the established pattern for this everywhere else in the
+// backend (inventory/inward/outward/dashboard/warehouse) — this file was missing
+// it on every other route, which meant any authenticated WORKER or CUSTOMER could
+// read (or, for /plan endpoints, DELETE) another warehouse's cycle-count plans,
+// sessions, and live inventory just by supplying a different warehouseId/session
+// id. ADMIN is unrestricted, matching resolveScopedCodes' own ADMIN behavior.
+// Sends the 403 itself and returns false so callers can just `if (!ok) return;`.
+async function assertWarehouseScope(req: express.Request, res: express.Response, warehouseId: string): Promise<boolean> {
+  if (!warehouseId) return true; // let the route's own "warehouseId required" check handle this
+  if (req.user?.role === 'ADMIN') return true;
+  const wh = await prisma.warehouse.findUnique({ where: { id: warehouseId }, select: { code: true } });
+  if (!wh) return true; // let the route's own "not found" handling take it from here
+  const scoped = resolveScopedCodes(req, [wh.code.toUpperCase()]);
+  if (!scoped.length || scoped[0] === FORBIDDEN_CODE) {
+    res.status(403).json({ error: 'You do not have access to this warehouse' });
+    return false;
+  }
+  return true;
+}
 
 // Always use LOCAL date (not UTC) so Mon–Sat boundaries are correct in IST and other offset zones
 const dateStr = (d: Date) => {
@@ -52,10 +77,18 @@ async function parseSessions(sessions: any[]) {
 
 // ── GET /warehouses — list warehouses with live location counts ───────────────
 // Counts both rack bins AND floor locations (FG05 is floor-only)
-router.get('/warehouses', async (_req, res) => {
+router.get('/warehouses', async (req, res) => {
   try {
+    // Was returning every active warehouse to every authenticated caller regardless of
+    // role — a CUSTOMER account could see (and, via other routes, use the id from) every
+    // other customer's warehouse. Non-admins now only see warehouses in their own scope.
+    const allowedCodes = req.user?.role === 'ADMIN' ? null : resolveScopedCodes(req, []);
     const whs = await prisma.warehouse.findMany({
-      where: { isActive: true, NOT: { code: 'WH-DEFAULT' } },
+      where: {
+        isActive: true,
+        NOT: { code: 'WH-DEFAULT' },
+        ...(allowedCodes ? { code: { in: allowedCodes } } : {}),
+      },
       select: { id: true, name: true, code: true },
     });
     const result = await Promise.all(whs.map(async wh => {
@@ -76,6 +109,7 @@ router.get('/plan/current', async (req, res) => {
   try {
     const warehouseId = String(req.query.warehouseId || '');
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId required' });
+    if (!(await assertWarehouseScope(req, res, warehouseId))) return;
 
     await markOverdue();
 
@@ -105,6 +139,7 @@ router.delete('/plan/current', requireRole('ADMIN', 'WORKER'), async (req, res) 
   try {
     const warehouseId = String(req.query.warehouseId || '');
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId required' });
+    if (!(await assertWarehouseScope(req, res, warehouseId))) return;
 
     // Get ALL active (non-completed) tasks for this warehouse, not just current week
     const tasks = await prisma.$queryRawUnsafe<any[]>(
@@ -131,6 +166,7 @@ router.post('/plan/generate', requireRole('ADMIN', 'WORKER'), async (req, res) =
   try {
     const { warehouseId } = req.body;
     if (!warehouseId) return res.status(400).json({ error: 'warehouseId required' });
+    if (!(await assertWarehouseScope(req, res, warehouseId))) return;
 
     const monday    = getMondayOfWeek();
     const mondayStr = dateStr(monday);
@@ -220,6 +256,7 @@ router.get('/session/:id', async (req, res) => {
       req.params.id
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (!(await assertWarehouseScope(req, res, rows[0].warehouseId))) return;
     const [s] = await parseSessions(rows);
     res.json({ session: s });
   } catch (err: any) {
@@ -240,6 +277,7 @@ router.get('/session/:id/export-data', async (req, res) => {
       req.params.id
     );
     if (!rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!(await assertWarehouseScope(req, res, rows[0].warehouseId))) return;
 
     const session  = rows[0];
     const binIds: any[] = JSON.parse(session.binIds || '[]');
@@ -303,9 +341,11 @@ router.put('/session/:id/check-bin', requireRole('ADMIN', 'WORKER'), async (req,
     // status: 'OK' | 'DISCREPANCY' | 'UNCHECKED'
 
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM "DailyCycleSession" WHERE id = $1`, req.params.id
+      `SELECT s.*, t."warehouseId" FROM "DailyCycleSession" s
+       JOIN "WeeklyCycleTask" t ON s."taskId" = t.id WHERE s.id = $1`, req.params.id
     );
     if (!rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!(await assertWarehouseScope(req, res, rows[0].warehouseId))) return;
     const session = rows[0];
 
     let checked: any[] = JSON.parse(session.checkedBins || '[]');
@@ -339,6 +379,15 @@ router.put('/session/:id/check-bin', requireRole('ADMIN', 'WORKER'), async (req,
 router.post('/session/:id/complete', requireRole('ADMIN', 'WORKER'), async (req, res) => {
   try {
     const { completedBy } = req.body;
+
+    // Same cross-tenant check as the other session routes — resolve this session's
+    // warehouse before allowing the write, not just its role.
+    const scopeRow = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT t."warehouseId" FROM "DailyCycleSession" s
+       JOIN "WeeklyCycleTask" t ON s."taskId" = t.id WHERE s.id = $1`, req.params.id
+    );
+    if (!scopeRow.length) return res.status(404).json({ error: 'Session not found' });
+    if (!(await assertWarehouseScope(req, res, scopeRow[0].warehouseId))) return;
 
     // Mark this session completed
     await prisma.$executeRawUnsafe(
@@ -466,16 +515,28 @@ router.get('/records', async (req, res) => {
 });
 
 // ── GET /pending — all overdue/in-progress sessions (all weeks) ───────────────
-router.get('/pending', async (_req, res) => {
+router.get('/pending', async (req, res) => {
   try {
     await markOverdue();
     const today = dateStr(new Date());
+    // Was returning every warehouse's pending sessions to every authenticated caller —
+    // same cross-tenant gap as the routes above. Scope to the caller's own warehouses.
+    const allowedCodes = resolveScopedCodes(req, []);
+    let warehouseFilter = '';
+    const params: any[] = [today];
+    if (allowedCodes.length) {
+      const whs = await prisma.warehouse.findMany({ where: { code: { in: allowedCodes } }, select: { id: true } });
+      if (!whs.length) return res.json({ sessions: [] });
+      const ids = whs.map(w => w.id);
+      warehouseFilter = ` AND t."warehouseId" IN (${ids.map((_, i) => `$${i + 2}`).join(',')})`;
+      params.push(...ids);
+    }
     const rows  = await prisma.$queryRawUnsafe<any[]>(
       `SELECT s.*, t."weekStart", t."warehouseId" FROM "DailyCycleSession" s
        JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
-       WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s."scheduledDate" <= $1
+       WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s."scheduledDate" <= $1${warehouseFilter}
        ORDER BY s."scheduledDate" ASC`,
-      today
+      ...params
     );
     res.json({ sessions: await parseSessions(rows) });
   } catch (err: any) {
@@ -489,9 +550,16 @@ router.get('/discrepancy-report', async (req, res) => {
   try {
     const { from, to, warehouseCode } = req.query;
 
-    // Join all sessions with their parent task + warehouse
-    const wcFilter = warehouseCode ? String(warehouseCode).toUpperCase() : null;
-    const sessionParams: any[] = wcFilter ? [wcFilter] : [];
+    // Join all sessions with their parent task + warehouse. Same cross-tenant gap as the
+    // other routes in this file: a supplied warehouseCode was used as-is with no check
+    // that the caller is actually allowed to see it, and omitting it entirely returned
+    // every warehouse's discrepancies to any authenticated account.
+    const requestedCodes = warehouseCode ? [String(warehouseCode).toUpperCase()] : [];
+    const scopedCodes = resolveScopedCodes(req, requestedCodes);
+    const sessionParams: any[] = scopedCodes;
+    const whereClause = scopedCodes.length
+      ? `WHERE w.code IN (${scopedCodes.map((_, i) => `$${i + 1}`).join(',')})`
+      : '';
     const sessions = await prisma.$queryRawUnsafe<any[]>(
       `SELECT s.id as "sessionId", s."scheduledDate", s."completedAt", s."completedBy",
               s."binIds", s."checkedBins",
@@ -500,7 +568,7 @@ router.get('/discrepancy-report', async (req, res) => {
        FROM "DailyCycleSession" s
        JOIN "WeeklyCycleTask" t ON s."taskId" = t.id
        JOIN "Warehouse" w ON t."warehouseId" = w.id
-       ${wcFilter ? 'WHERE w.code = $1' : ''}
+       ${whereClause}
        ORDER BY s."scheduledDate" DESC`,
       ...sessionParams
     );
@@ -548,14 +616,27 @@ router.get('/discrepancy-report', async (req, res) => {
 });
 
 // ── GET /stats — for dashboard pending count ─────────────────────────────────
-router.get('/stats', async (_req, res) => {
+router.get('/stats', async (req, res) => {
   try {
     await markOverdue();
     const today = dateStr(new Date());
+    // Scope the count to the caller's own warehouses, same as /pending above — a
+    // WORKER/CUSTOMER shouldn't see other warehouses' operational load, even as a
+    // bare number.
+    const allowedCodes = resolveScopedCodes(req, []);
+    const params: any[] = [today];
+    let joinFilter = '';
+    if (allowedCodes.length) {
+      const whs = await prisma.warehouse.findMany({ where: { code: { in: allowedCodes } }, select: { id: true } });
+      if (!whs.length) return res.json({ pendingCount: 0 });
+      const ids = whs.map(w => w.id);
+      joinFilter = ` JOIN "WeeklyCycleTask" t ON s."taskId" = t.id AND t."warehouseId" IN (${ids.map((_, i) => `$${i + 2}`).join(',')})`;
+      params.push(...ids);
+    }
     const rows  = await prisma.$queryRawUnsafe<[{count: any}]>(
-      `SELECT COUNT(*) as count FROM "DailyCycleSession"
-       WHERE status IN ('PENDING','OVERDUE','IN_PROGRESS') AND "scheduledDate" <= $1`,
-      today
+      `SELECT COUNT(*) as count FROM "DailyCycleSession" s${joinFilter}
+       WHERE s.status IN ('PENDING','OVERDUE','IN_PROGRESS') AND s."scheduledDate" <= $1`,
+      ...params
     );
     res.json({ pendingCount: Number(rows[0]?.count ?? 0) });
   } catch (err: any) {
