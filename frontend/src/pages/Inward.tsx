@@ -753,7 +753,7 @@ const EntryFormModal = ({
     const wh  = (form.stockLocation || "").trim().toUpperCase();
     if (!bin || !wh) { setBinError(null); return; }
     try {
-      const r = await fetch(`http://localhost:5001/api/warehouse/valid-bins?code=${encodeURIComponent(wh)}`);
+      const r = await fetch(`${API}/warehouse/valid-bins?code=${encodeURIComponent(wh)}`);
       const d = await r.json();
       const valid: string[] = d.bins || [];
       if (valid.length === 0) {
@@ -1435,13 +1435,12 @@ export default function InwardClient() {
     const toCommit = entries.filter((e) => e.entryStatus === "APPROVED" || e.entryStatus === "DISCREPANCY");
     if (!toCommit.length) { setSaveError("No approved or discrepancy entries to commit."); return; }
 
-    // Block commit if any entry has a duplicate (materialCode + huUnit) combination
-    const dupeInCommit = toCommit.filter((e) => isSpecificHU(e.huUnit) && duplicateHUs.has(`${(e.materialCode||'').trim()}|${(e.huUnit||'').trim()}`));
-    if (dupeInCommit.length > 0) {
-      const dupeList = [...new Set(dupeInCommit.map((e) => `${e.materialCode} / ${e.huUnit}`))].join(", ");
-      setSaveError(`Duplicate HU Unit detected for same material: ${dupeList}. Resolve before committing — the same physical HU of the same material cannot be added twice.`);
-      return;
-    }
+    // Duplicate (materialCode + huUnit) combinations are flagged visually on each row
+    // (isDupeHU) so the operator can see and double-check them, but no longer block the
+    // commit — a real HU sometimes legitimately gets split into more than one line (e.g.
+    // partial pallets on the same tag), and forcing a hard stop here meant those valid
+    // rows couldn't reach inventory without artificially editing the sheet. The check is
+    // now a review aid, not a gate.
 
     // Block commit if two or more entries target the same real rack bin — rack bins hold
     // only 1 pallet each. Floor locations are unaffected regardless of warehouse.
