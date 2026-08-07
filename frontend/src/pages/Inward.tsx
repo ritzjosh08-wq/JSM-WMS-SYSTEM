@@ -1266,7 +1266,7 @@ export default function InwardClient() {
         const err = await parseRes.json();
         throw new Error(err.error || 'Failed to parse Excel on backend');
       }
-      const { rows: parsedRows, blankRowsSkipped, totalRowsInSheet } = await parseRes.json();
+      const { rows: parsedRows, blankRowsSkipped, totalRowsInSheet, headers: uploadedHeaders } = await parseRes.json();
       if (!parsedRows || !parsedRows.length) throw new Error("No data rows found in the file.");
       setSmartBlankSkipped(blankRowsSkipped || 0);
       setSmartTotalRows(totalRowsInSheet ?? parsedRows.length);
@@ -1339,7 +1339,15 @@ export default function InwardClient() {
         const huUnitRaw = toStr(col("HU Unit", "HU No"));
         const huUnitVal = /^n\/?a$/i.test(huUnitRaw.trim()) ? "" : huUnitRaw;
 
-        const stockLocationVal = toStr(col("Stock Location"));
+        // Raw stock/godown-snapshot exports (as opposed to the Inward receiving template)
+        // often have no "Stock Location" column at all — the whole export belongs to one
+        // warehouse, named only in a file/sheet title, never per-row. Previously this showed
+        // as a blank Stock Location in the review table even though /inward/commit on the
+        // backend was ALREADY defaulting a blank stockLocation to CM35 (see routes/inward.ts
+        // "defaultWarehouse") — so what committed silently differed from what the operator saw
+        // on screen before approving. Mirror that same default here so the review table shows
+        // the warehouse this will actually land in, instead of a misleading blank.
+        const stockLocationVal = toStr(col("Stock Location")) || "CM35";
         // No Category column at all is common on a raw stock-take sheet. Default sensibly by
         // warehouse instead of always assuming raw material: FG05 is the finished-goods
         // warehouse, so a category-less row there is finished goods, not "RM".
@@ -1412,11 +1420,31 @@ export default function InwardClient() {
         }
       }
       const sharedHUs = [...huCounts.entries()].filter(([, c]) => c > 1).map(([key]) => key);
+
+      // Tell the operator up front when the sheet is missing whole columns the Inward
+      // template normally carries (SAP Doc No, Invoice No, Truck/Transporter/LR) — rather
+      // than silently leaving those fields blank on every row and letting it look like the
+      // parser "isn't reading" them. A raw stock/godown-snapshot export genuinely doesn't
+      // have these columns at all (they're shipment-receiving fields, not stock-take
+      // fields) — this is expected for that file type, not a bug, but the operator should
+      // know it's happening rather than discover it downstream.
+      const headerSet = new Set((uploadedHeaders || []).map((h: string) => h.toLowerCase().trim().replace(/\s+/g, ' ')));
+      const hasAnyHeader = (...names: string[]) => names.some(n => headerSet.has(n.toLowerCase().trim().replace(/\s+/g, ' ')));
+      const missingFieldLabels: string[] = [];
+      if (!hasAnyHeader('SAP Doc No'))                        missingFieldLabels.push('SAP Doc No');
+      if (!hasAnyHeader('Invoice No'))                         missingFieldLabels.push('Invoice No');
+      if (!hasAnyHeader('Stock Location'))                     missingFieldLabels.push('Stock Location (defaulted to CM35 below)');
+      if (!hasAnyHeader('Truck No'))                           missingFieldLabels.push('Truck No');
+      if (!hasAnyHeader('Transporter'))                        missingFieldLabels.push('Transporter');
+      if (!hasAnyHeader('LR No'))                              missingFieldLabels.push('LR No');
+
       // Only notify for real quantity discrepancies, not just same material code
       if (discrepantRows.length > 0) {
         setSmartError(`⚠ ${discrepantRows.length} row(s) have quantity discrepancies — review and mark discrepancy before committing.`);
       } else if (sharedHUs.length > 0) {
         setSmartError(`⚠ ${sharedHUs.length} material+HU combination(s) appear multiple times — highlighted for review.`);
+      } else if (missingFieldLabels.length > 0) {
+        setSmartError(`ℹ This sheet has no column for: ${missingFieldLabels.join(', ')} — these will stay blank for every row because the source file doesn't contain that data (this looks like a stock/godown snapshot rather than the Inward receiving template). Material Code, HU Unit, BIN, Category and the rest are unaffected.`);
       }
 
       // Accept all rows — duplicates are flagged visually, not skipped
